@@ -473,6 +473,25 @@
                 </exclusion>
             </exclusions>
         </dependency>
+        <!-- <dependency> -->
+        <!--   <groupId>io.ray</groupId> -->
+        <!--   <artifactId>ray-runtime</artifactId> -->
+        <!--   <version>1.2.0</version> -->
+        <!--     <exclusions> -->
+        <!--         <exclusion> -->
+        <!--             <groupId>org.testng</groupId> -->
+        <!--             <artifactId>testng</artifactId> -->
+        <!--         </exclusion> -->
+        <!--         <exclusion> -->
+        <!--           <groupId>org.objenesis</groupId> -->
+        <!--           <artifactId>objenesis</artifactId> -->
+        <!--         </exclusion> -->
+        <!--         <exclusion> -->
+        <!--           <groupId>redis.clients</groupId> -->
+        <!--           <artifactId>jedis</artifactId> -->
+        <!--         </exclusion> -->
+        <!--     </exclusions> -->
+        <!-- </dependency> -->
     </dependencies>
 
     <build>
