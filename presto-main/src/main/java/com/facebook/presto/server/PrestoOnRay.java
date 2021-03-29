@@ -11,8 +11,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.facebook.presto.server;
-import com.facebook.presto.server.PrestoServer;
+package com.facebook.presto.server.ray;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -25,6 +24,8 @@ import java.util.stream.Collectors;
 import io.ray.api.ActorHandle;
 import io.ray.api.ObjectRef;
 import io.ray.api.Ray;
+
+import com.facebook.presto.server.PrestoServer;
 
 public class PrestoOnRay {
     public static int square(int x)
