@@ -20,6 +20,7 @@
 #include <folly/synchronization/Latch.h>
 #include <velox/common/base/Exceptions.h>
 #include "presto_cpp/main/common/Configs.h"
+#include "presto_cpp/main/common/Utils.h"
 #include "presto_cpp/main/http/HttpClient.h"
 
 namespace facebook::presto::http {
@@ -145,7 +146,7 @@ std::unique_ptr<folly::IOBuf> HttpResponse::consumeBody(
 
 void HttpResponse::freeBuffers() {
   if (pool_ != nullptr) {
-    for (auto& iobuf : bodyChain_) {
+    for (const auto& iobuf : bodyChain_) {
       if (iobuf != nullptr) {
         pool_->free(iobuf->writableData(), iobuf->capacity());
       }
@@ -167,15 +168,7 @@ HttpResponse::nextAllocationSize(uint64_t dataLength) const {
 }
 
 std::string HttpResponse::dumpBodyChain() const {
-  std::string responseBody;
-  if (!bodyChain_.empty()) {
-    std::ostringstream oss;
-    for (auto& buf : bodyChain_) {
-      oss << std::string((const char*)buf->data(), buf->length());
-    }
-    responseBody = oss.str();
-  }
-  return responseBody;
+  return bodyChain_.empty() ? "Empty response" : util::extractMessageBody(bodyChain_);
 }
 
 class ResponseHandler : public proxygen::HTTPTransactionHandler {

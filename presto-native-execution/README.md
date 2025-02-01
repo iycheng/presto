@@ -22,14 +22,23 @@ using [Velox](https://github.com/facebookincubator/velox).
 Dependency installation scripts based on the operating system are
 available inside `presto/presto-native-execution/scripts`.
 
-* MacOS: `setup-macos.sh`
+* macOS: `setup-macos.sh`
 * CentOS Stream 9: `setup-centos.sh`
 * Ubuntu: `setup-ubuntu.sh`
 
-Create a directory say `dependencies` and invoke one of these scripts from
-this folder. All the dependencies are installed in the system default location eg: `/usr/local`.
-To change the installation location specify a path using the `INSTALL_PREFIX` environment variable.
-For example, change the location if the default location cannot be written to by the user running the setup script.
+The above setup scripts use the `DEPENDENCY_DIR` environment variable to set the
+location to download and build packages. This defaults to `deps-download` in the current
+working directory.
+
+Use `INSTALL_PREFIX` to set the install directory of the packages. This defaults to
+`deps-install` in the current working directory on macOS and to the default install
+location (for example, `/usr/local`) on Linux.
+Using the default install location `/usr/local` on macOS is discouraged because this
+location is owned by `root`.
+
+Manually add the `INSTALL_PREFIX` value in the IDE or bash environment, so subsequent
+Prestissimo builds can use the installed packages. Say
+`export INSTALL_PREFIX=/Users/$USERNAME/presto/presto-native-execution/deps-install` to `~/.zshrc`.
 
 The following libraries are installed by the above setup scripts.
 The Velox library installs other
@@ -41,7 +50,7 @@ not listed below.
 | [Velox](https://github.com/facebookincubator/velox)  | Latest  |
 | [CMake](https://cmake.org/) | Minimum `3.10` |
 | [gperf](https://www.gnu.org/software/gperf) |`v3.1`|
-| [proxygen](https://github.com/facebook/proxygen) |`v2024.04.01.00`|
+| [proxygen](https://github.com/facebook/proxygen) |`v2024.07.01.00`|
 
 Prestissimo sources the Velox scripts and the configuration for the installation
 location and other configuration applies to Prestissimo. Please make sure to also
@@ -61,16 +70,16 @@ Compilers (and versions) not mentioned are known to not work or have not been tr
 | -- | -------- |
 | CentOS 9/RHEL 9 | `gcc12` |
 | Ubuntu 22.04 | `gcc11` |
-| MacOS | `clang15` |
+| macOS | `clang15` |
 
 #### Older alternatives
 | OS | compiler |
 | -- | -------- |
 | Ubuntu 20.04 | `gcc9` |
-| MacOS | `clang14` |
+| macOS | `clang14` |
 
 ### Build Prestissimo
-#### Parquet and S3 Supprt
+#### Parquet and S3 Support
 To enable Parquet and S3 support, set `PRESTO_ENABLE_PARQUET = "ON"`,
 `PRESTO_ENABLE_S3 = "ON"` in the environment.
 
@@ -103,10 +112,8 @@ follow these steps:
 
 * After installing the above dependencies, from the
 `presto/presto-native-execution` directory, run `make`
-* For development, use
-`make debug` to build a non-optimized debug version.
-* Use `make unittest` to build
-and run tests.
+* For development, use `make debug` to build a non-optimized debug version.
+* Use `make unittest` to build and run tests.
 
 ### Makefile Targets
 A reminder of the available Makefile targets can be obtained using `make help`
