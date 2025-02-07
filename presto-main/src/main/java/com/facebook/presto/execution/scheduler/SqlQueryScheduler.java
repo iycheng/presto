@@ -38,6 +38,7 @@ import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.VariableAllocator;
 import com.facebook.presto.spi.WarningCollector;
+import com.facebook.presto.spi.plan.PlanFragmentId;
 import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
 import com.facebook.presto.sql.parser.SqlParser;
@@ -46,7 +47,6 @@ import com.facebook.presto.sql.planner.SplitSourceFactory;
 import com.facebook.presto.sql.planner.SubPlan;
 import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.planner.optimizations.PlanOptimizer;
-import com.facebook.presto.sql.planner.plan.PlanFragmentId;
 import com.facebook.presto.sql.planner.sanity.PlanChecker;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -79,6 +79,7 @@ import static com.facebook.airlift.http.client.HttpUriBuilder.uriBuilderFrom;
 import static com.facebook.presto.SystemSessionProperties.getMaxConcurrentMaterializations;
 import static com.facebook.presto.SystemSessionProperties.getPartialResultsCompletionRatioThreshold;
 import static com.facebook.presto.SystemSessionProperties.getPartialResultsMaxExecutionTimeMultiplier;
+import static com.facebook.presto.SystemSessionProperties.isEnhancedCTESchedulingEnabled;
 import static com.facebook.presto.SystemSessionProperties.isPartialResultsEnabled;
 import static com.facebook.presto.SystemSessionProperties.isRuntimeOptimizerEnabled;
 import static com.facebook.presto.execution.BasicStageExecutionStats.aggregateBasicStageStats;
@@ -142,7 +143,6 @@ public class SqlQueryScheduler
     private final Set<StageId> runtimeOptimizedStages = Collections.synchronizedSet(new HashSet<>());
     private final PlanChecker planChecker;
     private final Metadata metadata;
-    private final SqlParser sqlParser;
 
     private final Map<StageId, StageExecutionAndScheduler> stageExecutions = new ConcurrentHashMap<>();
     private final ExecutorService executor;
@@ -150,6 +150,7 @@ public class SqlQueryScheduler
     private final AtomicBoolean scheduling = new AtomicBoolean();
 
     private final PartialResultQueryTaskTracker partialResultQueryTaskTracker;
+    private final CTEMaterializationTracker cteMaterializationTracker = new CTEMaterializationTracker();
 
     public static SqlQueryScheduler createSqlQueryScheduler(
             LocationFactory locationFactory,
@@ -237,7 +238,6 @@ public class SqlQueryScheduler
         this.variableAllocator = requireNonNull(variableAllocator, "variableAllocator is null");
         this.planChecker = requireNonNull(planChecker, "planChecker is null");
         this.metadata = requireNonNull(metadata, "metadata is null");
-        this.sqlParser = requireNonNull(sqlParser, "sqlParser is null");
         this.sectionExecutionFactory = requireNonNull(sectionExecutionFactory, "sectionExecutionFactory is null");
         this.remoteTaskFactory = requireNonNull(remoteTaskFactory, "remoteTaskFactory is null");
         this.splitSourceFactory = requireNonNull(splitSourceFactory, "splitSourceFactory is null");
@@ -280,6 +280,17 @@ public class SqlQueryScheduler
 
         for (StageExecutionAndScheduler stageExecutionInfo : stageExecutions.values()) {
             SqlStageExecution stageExecution = stageExecutionInfo.getStageExecution();
+            // Add a listener for state changes
+            if (stageExecution.isCTETableFinishStage()) {
+                stageExecution.addStateChangeListener(state -> {
+                    if (state == StageExecutionState.FINISHED) {
+                        String cteName = stageExecution.getCTEWriterId();
+                        log.debug("CTE write completed for: " + cteName);
+                        // Notify the materialization tracker
+                        cteMaterializationTracker.markCTEAsMaterialized(cteName);
+                    }
+                });
+            }
             stageExecution.addStateChangeListener(state -> {
                 if (queryStateMachine.isDone()) {
                     return;
@@ -365,7 +376,8 @@ public class SqlQueryScheduler
                         summarizeTaskInfo,
                         remoteTaskFactory,
                         splitSourceFactory,
-                        0).getSectionStages();
+                        0,
+                        cteMaterializationTracker).getSectionStages();
         stages.addAll(sectionStages);
 
         return stages.build();
@@ -462,7 +474,9 @@ public class SqlQueryScheduler
                             ScheduleResult.BlockedReason blockedReason = result.getBlockedReason().get();
                             switch (blockedReason) {
                                 case WRITER_SCALING:
-                                    // no-op
+                                    break;
+                                case WAITING_FOR_CTE_MATERIALIZATION:
+                                    schedulerStats.getWaitingForCTEMaterialization().update(1);
                                     break;
                                 case WAITING_FOR_SOURCE:
                                     schedulerStats.getWaitingForSource().update(1);
@@ -570,10 +584,12 @@ public class SqlQueryScheduler
                         .map(section -> getStageExecution(section.getPlan().getFragment().getId()).getState())
                         .filter(state -> !state.isDone() && state != PLANNED)
                         .count();
+
         return stream(forTree(StreamingPlanSection::getChildren).depthFirstPreOrder(sectionedPlan))
                 // get all sections ready for execution
                 .filter(this::isReadyForExecution)
-                .limit(maxConcurrentMaterializations - runningPlanSections)
+                // for enhanced cte blocking we do not need a limit on the sections
+                .limit(isEnhancedCTESchedulingEnabled(session) ? Long.MAX_VALUE : maxConcurrentMaterializations - runningPlanSections)
                 .map(this::tryCostBasedOptimize)
                 .collect(toImmutableList());
     }
@@ -596,7 +612,7 @@ public class SqlQueryScheduler
                 .forEach(currentSubPlan -> {
                     Optional<PlanFragment> newPlanFragment = performRuntimeOptimizations(currentSubPlan);
                     if (newPlanFragment.isPresent()) {
-                        planChecker.validatePlanFragment(newPlanFragment.get().getRoot(), session, metadata, sqlParser, TypeProvider.viewOf(variableAllocator.getVariables()), warningCollector);
+                        planChecker.validatePlanFragment(newPlanFragment.get(), session, metadata, warningCollector);
                         oldToNewFragment.put(currentSubPlan.getFragment(), newPlanFragment.get());
                     }
                 });
@@ -680,7 +696,8 @@ public class SqlQueryScheduler
                 summarizeTaskInfo,
                 remoteTaskFactory,
                 splitSourceFactory,
-                0);
+                0,
+                cteMaterializationTracker);
         addStateChangeListeners(sectionExecution);
         Map<StageId, StageExecutionAndScheduler> updatedStageExecutions = sectionExecution.getSectionStages().stream()
                 .collect(toImmutableMap(execution -> execution.getStageExecution().getStageExecutionId().getStageId(), identity()));
@@ -776,10 +793,13 @@ public class SqlQueryScheduler
             // already scheduled
             return false;
         }
-        for (StreamingPlanSection child : section.getChildren()) {
-            SqlStageExecution rootStageExecution = getStageExecution(child.getPlan().getFragment().getId());
-            if (rootStageExecution.getState() != FINISHED) {
-                return false;
+        if (!isEnhancedCTESchedulingEnabled(session)) {
+            // Enhanced cte blocking is not enabled so block till child sections are complete
+            for (StreamingPlanSection child : section.getChildren()) {
+                SqlStageExecution rootStageExecution = getStageExecution(child.getPlan().getFragment().getId());
+                if (rootStageExecution.getState() != FINISHED) {
+                    return false;
+                }
             }
         }
         return true;

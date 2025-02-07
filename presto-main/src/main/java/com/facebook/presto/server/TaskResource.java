@@ -314,7 +314,7 @@ public class TaskResource
                             .build();
                 })
                 .findFirst()
-                .orElse(Response.status(Response.Status.NOT_FOUND).build());
+                .orElseGet(Response.status(Response.Status.NOT_FOUND)::build);
     }
 
     @HEAD
@@ -322,8 +322,9 @@ public class TaskResource
     public Response taskResultsHeaders(
             @PathParam("taskId") TaskId taskId,
             @PathParam("bufferId") OutputBufferId bufferId,
-            @PathParam("token") final long unused)
+            @PathParam("token") final long token)
     {
+        taskManager.acknowledgeTaskResults(taskId, bufferId, token);
         return taskResultsHeaders(taskId, bufferId);
     }
 

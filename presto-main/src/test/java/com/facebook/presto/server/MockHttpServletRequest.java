@@ -35,6 +35,7 @@ import java.io.BufferedReader;
 import java.security.Principal;
 import java.util.Collection;
 import java.util.Enumeration;
+import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
 
@@ -45,6 +46,7 @@ import static java.util.Objects.requireNonNull;
 public class MockHttpServletRequest
         implements HttpServletRequest
 {
+    private static final String DEFAULT_ADDRESS = "127.0.0.1";
     private final ListMultimap<String, String> headers;
     private final String remoteAddress;
     private final Map<String, Object> attributes;
@@ -53,7 +55,13 @@ public class MockHttpServletRequest
     {
         this.headers = ImmutableListMultimap.copyOf(requireNonNull(headers, "headers is null"));
         this.remoteAddress = requireNonNull(remoteAddress, "remoteAddress is null");
-        this.attributes = ImmutableMap.copyOf(requireNonNull(attributes, "attributes is null"));
+        this.attributes = new HashMap<>(requireNonNull(attributes, "attributes is null"));
+    }
+
+    public MockHttpServletRequest(ListMultimap<String, String> headers)
+    {
+        // Default remoteAddress and empty attributes
+        this(headers, DEFAULT_ADDRESS, ImmutableMap.of());
     }
 
     @Override
@@ -371,7 +379,7 @@ public class MockHttpServletRequest
     @Override
     public void setAttribute(String name, Object o)
     {
-        throw new UnsupportedOperationException();
+        attributes.put(name, o);
     }
 
     @Override

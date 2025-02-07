@@ -210,11 +210,24 @@ Property Name                                        Description
                                                      Available values are ``NONE`` or ``OAUTH2`` (default: ``NONE``).
                                                      ``OAUTH2`` requires either a credential or token.
 
+``iceberg.rest.auth.oauth2.uri``                     OAUTH2 server endpoint URI.
+                                                     Example: ``https://localhost:9191``
+
 ``iceberg.rest.auth.oauth2.credential``              The credential to use for OAUTH2 authentication.
                                                      Example: ``key:secret``
 
 ``iceberg.rest.auth.oauth2.token``                   The Bearer token to use for OAUTH2 authentication.
                                                      Example: ``SXVLUXUhIExFQ0tFUiEK``
+
+``iceberg.rest.auth.oauth2.scope``                   The scope to use for OAUTH2 authentication.
+                                                     This property is only applicable when using
+                                                     ``iceberg.rest.auth.oauth2.credential``.
+                                                     Example: ``PRINCIPAL_ROLE:ALL``
+
+``iceberg.rest.nested.namespace.enabled``            In REST Catalogs, tables are grouped into namespaces, that can be
+                                                     nested. But if a large number of recursive namespaces result in
+                                                     lower performance, querying nested namespaces can be disabled.
+                                                     Defaults to ``true``.
 
 ``iceberg.rest.session.type``                        The session type to use when communicating with the REST catalog.
                                                      Available values are ``NONE`` or ``USER`` (default: ``NONE``).
@@ -245,7 +258,7 @@ Property Name                                           Description             
 
                                                         Example: ``hdfs://nn:8020/warehouse/path``
                                                         This property is required if the ``iceberg.catalog.type`` is
-                                                        ``hadoop``.
+                                                        ``hadoop``. Otherwise, it will be ignored.
 
 ``iceberg.catalog.cached-catalog-num``                  The number of Iceberg catalogs to cache. This property is     ``10``
                                                         required if the ``iceberg.catalog.type`` is ``hadoop``.
@@ -258,7 +271,7 @@ Configuration Properties
 .. note::
 
     The Iceberg connector supports configuration options for
-    `Amazon S3 <https://prestodb.io/docs/current/connector/hive.html##amazon-s3-configuration>`_
+    `Amazon S3 <https://prestodb.io/docs/current/connector/hive.html#amazon-s3-configuration>`_
     as a Hive connector.
 
 The following configuration properties are available for all catalog types:
@@ -323,6 +336,8 @@ Property Name                                           Description             
 
 ``iceberg.metrics-max-inferred-column``                 The maximum number of columns for which metrics               ``100``
                                                         are collected.
+``iceberg.max-statistics-file-cache-size``              Maximum size in bytes that should be consumed by the          ``256MB``
+                                                        statistics file cache.
 ======================================================= ============================================================= ============
 
 Table Properties
@@ -500,19 +515,7 @@ JMX queries to get the metrics and verify the cache usage::
 Metastore Cache
 ^^^^^^^^^^^^^^^
 
-Metastore Cache only caches the schema, table, and table statistics. The table object cached in the `tableCache`
-is only used for reading the table metadata location and table properties and, the rest of the table metadata
-is fetched from the filesystem/object storage metadata location.
-
-.. note::
-
-    Metastore Cache would be applicable only for Hive Catalog in the Presto Iceberg connector.
-
-.. code-block:: none
-
-    hive.metastore-cache-ttl=2d
-    hive.metastore-refresh-interval=3d
-    hive.metastore-cache-maximum-size=10000000
+Iceberg Connector does not support Metastore Caching.
 
 Extra Hidden Metadata Columns
 -----------------------------
@@ -732,27 +735,48 @@ example uses the earliest snapshot ID: ``2423571386296047175``
 Procedures
 ----------
 
-Use the CALL statement to perform data manipulation or administrative tasks. Procedures are available in the ``system`` schema of the catalog.
+Use the :doc:`/sql/call` statement to perform data manipulation or administrative tasks. Procedures are available in the ``system`` schema of the catalog.
 
 Register Table
 ^^^^^^^^^^^^^^
 
 Iceberg tables for which table data and metadata already exist in the
 file system can be registered with the catalog. Use the ``register_table``
-procedure on the catalog's ``system`` schema and supply the target schema,
-desired table name, and the location of the table metadata::
+procedure on the catalog's ``system`` schema to register a table which
+already exists but does not known by the catalog.
+
+The following arguments are available:
+
+===================== ========== =============== =======================================================================
+Argument Name         required   type            Description
+===================== ========== =============== =======================================================================
+``schema``            ✔️         string          Schema of the table to register
+
+``table_name``        ✔️         string          Name of the table to register
+
+``metadata_location`` ✔️         string          The location of the table metadata which is to be registered
+
+``metadata_file``                string          An optionally specified metadata file which is to be registered
+===================== ========== =============== =======================================================================
+
+Examples:
+
+* Register a table through supplying the target schema, desired table name, and the location of the table metadata::
 
     CALL iceberg.system.register_table('schema_name', 'table_name', 'hdfs://localhost:9000/path/to/iceberg/table/metadata/dir')
+
+    CALL iceberg.system.register_table(table_name => 'table_name', schema => 'schema_name', metadata_location => 'hdfs://localhost:9000/path/to/iceberg/table/metadata/dir')
 
 .. note::
 
     If multiple metadata files of the same version exist at the specified
     location, the most recently modified one is used.
 
-A metadata file can optionally be included as an argument to ``register_table``
-where a specific metadata file contains the targeted table state::
+* Register a table through additionally supplying a specific metadata file::
 
     CALL iceberg.system.register_table('schema_name', 'table_name', 'hdfs://localhost:9000/path/to/iceberg/table/metadata/dir', '00000-35a08aed-f4b0-4010-95d2-9d73ef4be01c.metadata.json')
+
+    CALL iceberg.system.register_table(table_name => 'table_name', schema => 'schema_name', metadata_location => 'hdfs://localhost:9000/path/to/iceberg/table/metadata/dir', metadata_file => '00000-35a08aed-f4b0-4010-95d2-9d73ef4be01c.metadata.json')
 
 .. note::
 
@@ -775,9 +799,23 @@ Unregister Table
 ^^^^^^^^^^^^^^^^
 
 Iceberg tables can be unregistered from the catalog using the ``unregister_table``
-procedure on the catalog's ``system`` schema::
+procedure on the catalog's ``system`` schema.
+
+The following arguments are available:
+
+===================== ========== =============== ===================================
+Argument Name         required   type            Description
+===================== ========== =============== ===================================
+``schema``            ✔️         string          Schema of the table to unregister
+
+``table_name``        ✔️         string          Name of the table to unregister
+===================== ========== =============== ===================================
+
+Examples::
 
     CALL iceberg.system.unregister_table('schema_name', 'table_name')
+
+    CALL iceberg.system.unregister_table(table_name => 'table_name', schema => 'schema_name')
 
 .. note::
 
@@ -789,7 +827,7 @@ procedure on the catalog's ``system`` schema::
 Rollback to Snapshot
 ^^^^^^^^^^^^^^^^^^^^
 
-Roll back a table to a specific snapshot ID. Iceberg can roll back to a specific snapshot ID by using the ``rollback_to_snapshot`` procedure on Iceberg`s ``system`` schema::
+Rollback a table to a specific snapshot ID. Iceberg can rollback to a specific snapshot ID by using the ``rollback_to_snapshot`` procedure on Iceberg's ``system`` schema::
 
     CALL iceberg.system.rollback_to_snapshot('schema_name', 'table_name', snapshot_id);
 
@@ -798,12 +836,63 @@ The following arguments are available:
 ===================== ========== =============== =======================================================================
 Argument Name         required   type            Description
 ===================== ========== =============== =======================================================================
-``schema_name``       ✔️          string          Schema of the table to update
+``schema``            ✔️          string          Schema of the table to update
 
 ``table_name``        ✔️          string          Name of the table to update
 
 ``snapshot_id``       ✔️          long            Snapshot ID to rollback to
 ===================== ========== =============== =======================================================================
+
+Rollback to Timestamp
+^^^^^^^^^^^^^^^^^^^^^
+
+Rollback a table to a given point in time. Iceberg can rollback to a specific point in time by using the ``rollback_to_timestamp`` procedure on Iceberg's ``system`` schema.
+
+The following arguments are available:
+
+===================== ========== =============== =======================================================================
+Argument Name         required   type            Description
+===================== ========== =============== =======================================================================
+``schema``            ✔️          string          Schema of the table to update
+
+``table_name``        ✔️          string          Name of the table to update
+
+``timestamp``         ✔️          timestamp       Timestamp to rollback to
+===================== ========== =============== =======================================================================
+
+Example::
+
+    CALL iceberg.system.rollback_to_timestamp('schema_name', 'table_name', TIMESTAMP '1995-04-26 00:00:00.000');
+
+Set Current Snapshot
+^^^^^^^^^^^^^^^^^^^^
+
+This procedure sets a current snapshot ID for a table by using ``snapshot_id`` or ``ref``.
+Use either ``snapshot_id`` or ``ref``, but do not use both in the same procedure.
+
+The following arguments are available:
+
+===================== ========== =============== =======================================================================
+Argument Name         required   type            Description
+===================== ========== =============== =======================================================================
+``schema``            ✔️         string          Schema of the table to update
+
+``table_name``        ✔️         string          Name of the table to update
+
+``snapshot_id``                  long            Snapshot ID to set as current
+
+``ref``                          string          Snapshot Reference (branch or tag) to set as current
+===================== ========== =============== =======================================================================
+
+Examples:
+
+* Set current table snapshot ID for the given table to 10000 ::
+
+    CALL iceberg.system.set_current_snapshot('schema_name', 'table_name', 10000);
+
+* Set current table snapshot ID for the given table to snapshot ID of branch1 ::
+
+    CALL iceberg.system.set_current_snapshot(schema => 'schema_name', table_name => 'table_name', ref => 'branch1');
 
 Expire Snapshots
 ^^^^^^^^^^^^^^^^
@@ -866,6 +955,61 @@ Examples:
 
     CALL iceberg.system.remove_orphan_files(schema => 'db', table_name => 'sample');
 
+Fast Forward Branch
+^^^^^^^^^^^^^^^^^^^
+
+This procedure advances the current snapshot of the specified branch to a more recent snapshot from another branch without replaying any intermediate snapshots.
+``branch`` can be fast-forwarded up to the ``to`` snapshot if ``branch`` is an ancestor of ``to``.
+
+The following arguments are available:
+
+===================== ========== =============== =======================================================================
+Argument Name         required   type            Description
+===================== ========== =============== =======================================================================
+``schema``            ✔️         string          Schema of the table to update
+
+``table_name``        ✔️         string          Name of the table to update
+
+``branch``            ✔️         string          The branch you want to fast-forward
+
+``to``                ✔️         string          The branch you want to fast-forward to
+===================== ========== =============== =======================================================================
+
+Examples:
+
+* Fast-forward the ``dev`` branch to the latest snapshot of the ``main`` branch ::
+
+    CALL iceberg.system.fast_forward('schema_name', 'table_name', 'dev', 'main');
+
+* Given the branch named ``branch1`` does not exist yet, create a new branch named ``branch1``  and set it's current snapshot equal to the latest snapshot of the ``main`` branch ::
+
+    CALL iceberg.system.fast_forward('schema_name', 'table_name', 'branch1', 'main');
+
+Set Table Property
+^^^^^^^^^^^^^^^^^^
+
+Iceberg table property can be set from the catalog using the ``set_table_property`` procedure on the catalog's ``system`` schema.
+
+The following arguments are available:
+
+===================== ========== =============== =======================================================================
+Argument Name         required   type            Description
+===================== ========== =============== =======================================================================
+``schema``            ✔️         string          Schema of the table to update
+
+``table_name``        ✔️         string          Name of the table to update
+
+``key``               ✔️         string          Name of the table property
+
+``value``             ✔️         string          Value for the table property
+===================== ========== =============== =======================================================================
+
+Examples:
+
+* Set table property ``commit.retry.num-retries`` to ``10`` for a Iceberg table ::
+
+    CALL iceberg.system.set_table_property('schema_name', 'table_name', 'commit.retry.num-retries', '10');
+
 SQL Support
 -----------
 
@@ -900,7 +1044,7 @@ that is stored using the ORC file format, partitioned by ``ds`` and
       partitioning = ARRAY['ds', 'country']
     )
 
-Create an Iceberg table with Iceberg format version 2::
+Create an Iceberg table with Iceberg format version 2 and with commit_retries set to 5::
 
     CREATE TABLE iceberg.web.page_views_v2 (
       view_time timestamp,
@@ -912,7 +1056,8 @@ Create an Iceberg table with Iceberg format version 2::
     WITH (
       format = 'ORC',
       partitioning = ARRAY['ds', 'country'],
-      format_version = '2'
+      format_version = '2',
+      commit_retries = 5
     )
 
 Partition Column Transform
@@ -983,10 +1128,15 @@ Create an Iceberg table partitioned by ``ts``::
 CREATE VIEW
 ^^^^^^^^^^^
 
-The Iceberg connector supports creating views in Hive and Glue metastores.
+The Iceberg connector supports creating views in Hive, Glue, REST, and Nessie catalogs.
 To create a view named ``view_page_views`` for the ``iceberg.web.page_views`` table created in the `CREATE TABLE`_ example::
 
     CREATE VIEW iceberg.web.view_page_views AS SELECT user_id, country FROM iceberg.web.page_views;
+
+.. note::
+
+    The Iceberg REST catalog may not support view creation depending on the
+    type of the backing catalog.
 
 INSERT INTO
 ^^^^^^^^^^^
@@ -1046,6 +1196,20 @@ The table is partitioned by the transformed value of the column::
      ALTER TABLE iceberg.web.page_views ADD COLUMN dt date WITH (partitioning = 'day');
 
      ALTER TABLE iceberg.web.page_views ADD COLUMN ts timestamp WITH (partitioning = 'hour');
+
+Table properties can be modified for an Iceberg table using an ALTER TABLE SET PROPERTIES statement. Only `commit_retries` can be modified at present.
+For example, to set `commit_retries` to 6 for the table `iceberg.web.page_views_v2`, use::
+
+    ALTER TABLE iceberg.web.page_views_v2 SET PROPERTIES (commit_retries = 6);
+
+ALTER VIEW
+^^^^^^^^^^
+
+Alter view operations to alter the name of an existing view to a new name is supported in the Iceberg connector.
+
+.. code-block:: sql
+
+    ALTER VIEW iceberg.web.page_views RENAME TO iceberg.web.page_new_views;
 
 TRUNCATE
 ^^^^^^^^
@@ -1250,6 +1414,30 @@ For example, ``DESCRIBE`` from the partitioned Iceberg table ``customer``:
      comment   | varchar |       |
      (3 rows)
 
+UPDATE
+^^^^^^
+
+The Iceberg connector supports :doc:`../sql/update` operations on Iceberg
+tables. Only some tables support updates. These tables must be at minimum format
+version 2, and the ``write.update.mode`` must be set to `merge-on-read`.
+
+.. code-block:: sql
+
+    UPDATE region SET name = 'EU', comment = 'Europe' WHERE regionkey = 1;
+
+.. code-block:: text
+
+    UPDATE: 1 row
+
+    Query 20250204_010341_00021_ymwi5, FINISHED, 2 nodes
+
+The query returns an error if the table does not meet the requirements for
+updates.
+
+.. code-block:: text
+
+    Query 20250204_010445_00022_ymwi5 failed: Iceberg table updates require at least format version 2 and update mode must be merge-on-read
+
 Schema Evolution
 ----------------
 
@@ -1348,7 +1536,7 @@ Time Travel
 Iceberg and Presto Iceberg connector support time travel via table snapshots
 identified by unique snapshot IDs. The snapshot IDs are stored in the ``$snapshots``
 metadata table. You can rollback the state of a table to a previous snapshot ID.
-It also supports time travel query using VERSION (SYSTEM_VERSION) and TIMESTAMP (SYSTEM_TIME) options.
+It also supports time travel query using SYSTEM_VERSION (VERSION) and SYSTEM_TIME (TIMESTAMP) options.
 
 Example Queries
 ^^^^^^^^^^^^^^^
@@ -1488,9 +1676,11 @@ In this example, SYSTEM_TIME can be used as an alias for TIMESTAMP.
 
     // In following query, timestamp string is matching with second inserted record.
     SELECT * FROM ctas_nation FOR TIMESTAMP AS OF TIMESTAMP '2023-10-17 13:29:46.822 America/Los_Angeles';
+    SELECT * FROM ctas_nation FOR TIMESTAMP AS OF TIMESTAMP '2023-10-17 13:29:46.822';
 
     // Same example using SYSTEM_TIME as an alias for TIMESTAMP
     SELECT * FROM ctas_nation FOR SYSTEM_TIME AS OF TIMESTAMP '2023-10-17 13:29:46.822 America/Los_Angeles';
+    SELECT * FROM ctas_nation FOR SYSTEM_TIME AS OF TIMESTAMP '2023-10-17 13:29:46.822';
 
 .. code-block:: text
 
@@ -1500,8 +1690,12 @@ In this example, SYSTEM_TIME can be used as an alias for TIMESTAMP.
             20 | canada        |         2 | comment
     (2 rows)
 
-The option following FOR TIMESTAMP AS OF can accept any expression that returns a timestamp with time zone value.
-For example, `TIMESTAMP '2023-10-17 13:29:46.822 America/Los_Angeles'` is a constant string for the expression.
+.. note::
+
+    Timestamp without timezone will be parsed and rendered in the session time zone. See `TIMESTAMP <https://prestodb.io/docs/current/language/types.html#timestamp>`_.
+
+The option following FOR TIMESTAMP AS OF can accept any expression that returns a timestamp or timestamp with time zone value.
+For example, `TIMESTAMP '2023-10-17 13:29:46.822 America/Los_Angeles'` and `TIMESTAMP '2023-10-17 13:29:46.822'` are both valid timestamps. The first specifies the timestamp within the timezone `America/Los_Angeles`. The second will use the timestamp based on the user's session timezone.
 In the following query, the expression CURRENT_TIMESTAMP returns the current timestamp with time zone value.
 
 .. code-block:: sql
@@ -1522,6 +1716,7 @@ In the following query, the expression CURRENT_TIMESTAMP returns the current tim
     // In following query, timestamp string is matching with second inserted record.
     // BEFORE clause returns first record which is less than timestamp of the second record.
     SELECT * FROM ctas_nation FOR TIMESTAMP BEFORE TIMESTAMP '2023-10-17 13:29:46.822 America/Los_Angeles';
+    SELECT * FROM ctas_nation FOR TIMESTAMP BEFORE TIMESTAMP '2023-10-17 13:29:46.822';
 
 .. code-block:: text
 
@@ -1529,6 +1724,40 @@ In the following query, the expression CURRENT_TIMESTAMP returns the current tim
     -----------+---------------+-----------+---------
             10 | united states |         1 | comment
     (1 row)
+
+Querying branches and tags
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Iceberg supports branches and tags which are named references to snapshots.
+
+Query Iceberg table by specifying the branch name:
+
+.. code-block:: sql
+
+    SELECT * FROM nation FOR SYSTEM_VERSION AS OF 'testBranch';
+
+.. code-block:: text
+
+     nationkey |      name     | regionkey | comment
+    -----------+---------------+-----------+---------
+            10 | united states |         1 | comment
+            20 | canada        |         2 | comment
+            30 | mexico        |         3 | comment
+    (3 rows)
+
+Query Iceberg table by specifying the tag name:
+
+.. code-block:: sql
+
+    SELECT * FROM nation FOR SYSTEM_VERSION AS OF 'testTag';
+
+.. code-block:: text
+
+     nationkey |      name     | regionkey | comment
+    -----------+---------------+-----------+---------
+            10 | united states |         1 | comment
+            20 | canada        |         2 | comment
+    (3 rows)
 
 Type mapping
 ------------
@@ -1550,26 +1779,30 @@ Map of Iceberg types to the relevant PrestoDB types:
     - PrestoDB type
   * - ``BOOLEAN``
     - ``BOOLEAN``
-  * - ``BINARY``, ``FIXED``
-    - ``VARBINARY``
-  * - ``DATE``
-    - ``DATE``
-  * - ``DECIMAL``
-    - ``DECIMAL``
-  * - ``DOUBLE``
-    - ``DOUBLE``
+  * - ``INTEGER``
+    - ``INTEGER``
   * - ``LONG``
     - ``BIGINT``
   * - ``FLOAT``
     - ``REAL``
-  * - ``INTEGER``
-    - ``INTEGER``
+  * - ``DOUBLE``
+    - ``DOUBLE``
+  * - ``DECIMAL``
+    - ``DECIMAL``
+  * - ``STRING``
+    - ``VARCHAR``
+  * - ``BINARY``, ``FIXED``
+    - ``VARBINARY``
+  * - ``DATE``
+    - ``DATE``
   * - ``TIME``
     - ``TIME``
   * - ``TIMESTAMP``
     - ``TIMESTAMP``
-  * - ``STRING``
-    - ``VARCHAR``
+  * - ``TIMESTAMP``
+    - ``TIMESTAMP_WITH_TIMEZONE``
+  * - ``UUID``
+    - ``UUID``
   * - ``LIST``
     - ``ARRAY``
   * - ``MAP``
@@ -1609,17 +1842,95 @@ Map of PrestoDB types to the relevant Iceberg types:
     - ``BINARY``
   * - ``DATE``
     - ``DATE``
-  * - ``ROW``
-    - ``STRUCT``
-  * - ``ARRAY``
-    - ``LIST``
-  * - ``MAP``
-    - ``MAP``
   * - ``TIME``
     - ``TIME``
   * - ``TIMESTAMP``
     - ``TIMESTAMP WITHOUT ZONE``
   * - ``TIMESTAMP WITH TIMEZONE``
     - ``TIMESTAMP WITH ZONE``
+  * - ``UUID``
+    - ``UUID``
+  * - ``ARRAY``
+    - ``LIST``
+  * - ``MAP``
+    - ``MAP``
+  * - ``ROW``
+    - ``STRUCT``
+
 
 No other types are supported.
+
+
+Sorted Tables
+^^^^^^^^^^^^^
+
+The Iceberg connector supports the creation of sorted tables.
+Data in the Iceberg table is sorted as each file is written.
+
+Sorted Iceberg tables can decrease query execution time in many cases; but query times can also depend on the query shape and cluster configuration.
+Sorting is particularly beneficial when the sorted columns have a
+high cardinality and are used as a filter for selective reads.
+
+Configure sort order with the ``sorted_by`` table property to specify an array of
+one or more columns to use for sorting.
+The following example creates the table with the ``sorted_by`` property, and sorts the file based
+on the field ``join_date``. The default sort direction is ASC, with null values ordered as NULLS FIRST.
+
+.. code-block:: text
+
+    CREATE TABLE emp.employees.employee (
+        emp_id BIGINT,
+        emp_name VARCHAR,
+        join_date DATE,
+        country VARCHAR)
+    WITH (
+        sorted_by = ARRAY['join_date']
+    )
+
+Explicitly configure sort directions or null ordering using the following example::
+
+    CREATE TABLE emp.employees.employee (
+        emp_id BIGINT,
+        emp_name VARCHAR,
+        join_date DATE,
+        country VARCHAR)
+    WITH (
+        sorted_by = ARRAY['join_date DESC NULLS FIRST', 'emp_id ASC NULLS LAST']
+    )
+
+Sorting can be combined with partitioning on the same column. For example::
+
+    CREATE TABLE emp.employees.employee (
+        emp_id BIGINT,
+        emp_name VARCHAR,
+        join_date DATE,
+        country VARCHAR)
+    WITH (
+        partitioning = ARRAY['month(join_date)'],
+        sorted_by = ARRAY['join_date']
+    )
+
+The Iceberg connector does not support sort order transforms. The following sort order transformations are not supported:
+
+.. code-block:: text
+
+    bucket(n, column)
+    truncate(column, n)
+    year(column)
+    month(column)
+    day(column)
+    hour(column)
+
+For example::
+
+    CREATE TABLE emp.employees.employee (
+        emp_id BIGINT,
+        emp_name VARCHAR,
+        join_date DATE,
+        country VARCHAR)
+    WITH (
+        sorted_by = ARRAY['month(join_date)']
+    )
+
+If a user creates a table externally with non-identity sort columns and then inserts data, the following warning message will be shown.
+``Iceberg table sort order has sort fields of <X>, <Y>, ... which are not currently supported by Presto``

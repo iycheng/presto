@@ -20,8 +20,8 @@ import com.facebook.presto.dispatcher.DispatchManager;
 import com.facebook.presto.execution.QueryInfo;
 import com.facebook.presto.execution.QueryManager;
 import com.facebook.presto.server.BasicQueryInfo;
+import com.facebook.presto.spi.plan.PlanFragmentId;
 import com.facebook.presto.spi.security.Identity;
-import com.facebook.presto.sql.planner.plan.PlanFragmentId;
 import com.facebook.presto.sql.planner.planPrinter.JsonRenderer;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.MaterializedRow;
@@ -968,10 +968,11 @@ public abstract class AbstractTestDistributedQueries
 
         // test SHOW CREATE VIEW
         String expectedSql = formatSqlText(format(
-                "CREATE VIEW %s.%s.%s AS %s",
+                "CREATE VIEW %s.%s.%s SECURITY %s AS %s",
                 getSession().getCatalog().get(),
                 getSession().getSchema().get(),
                 "meta_test_view",
+                "DEFINER",
                 query)).trim();
 
         actual = computeActual("SHOW CREATE VIEW meta_test_view");
