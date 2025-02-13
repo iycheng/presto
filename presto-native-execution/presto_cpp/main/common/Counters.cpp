@@ -32,6 +32,17 @@ void registerPrestoMetrics() {
   DEFINE_METRIC(kCounterHTTPRequestLatencyMs, facebook::velox::StatType::AVG);
   DEFINE_METRIC(
       kCounterHttpClientNumConnectionsCreated, facebook::velox::StatType::SUM);
+  // Tracks http client transaction create delay in range of [0, 30s] with
+  // 30 buckets and reports P50, P90, P99, and P100.
+  DEFINE_HISTOGRAM_METRIC(
+      kCounterHTTPClientTransactionCreateDelay,
+      1'000,
+      0,
+      30'000,
+      50,
+      90,
+      99,
+      100);
   DEFINE_METRIC(kCounterNumQueryContexts, facebook::velox::StatType::AVG);
   DEFINE_METRIC(kCounterNumTasks, facebook::velox::StatType::AVG);
   DEFINE_METRIC(kCounterNumTasksBytesProcessed, facebook::velox::StatType::AVG);
@@ -44,6 +55,8 @@ void registerPrestoMetrics() {
   DEFINE_METRIC(kCounterNumZombiePrestoTasks, facebook::velox::StatType::AVG);
   DEFINE_METRIC(
       kCounterNumTasksWithStuckOperator, facebook::velox::StatType::AVG);
+  DEFINE_METRIC(
+      kCounterNumCancelledTasksByStuckDriver, facebook::velox::StatType::COUNT);
   DEFINE_METRIC(kCounterNumTasksDeadlock, facebook::velox::StatType::AVG);
   DEFINE_METRIC(
       kCounterNumTaskManagerLockTimeOut, facebook::velox::StatType::AVG);
@@ -70,8 +83,6 @@ void registerPrestoMetrics() {
   DEFINE_METRIC(
       kCounterNumBlockedWaitForConnectorDrivers,
       facebook::velox::StatType::AVG);
-  DEFINE_METRIC(
-      kCounterNumBlockedWaitForSpillDrivers, facebook::velox::StatType::AVG);
   DEFINE_METRIC(kCounterNumBlockedYieldDrivers, facebook::velox::StatType::AVG);
   DEFINE_METRIC(kCounterNumStuckDrivers, facebook::velox::StatType::AVG);
   DEFINE_METRIC(
@@ -100,6 +111,35 @@ void registerPrestoMetrics() {
   DEFINE_METRIC(kCounterMemoryPushbackCount, facebook::velox::StatType::COUNT);
   DEFINE_HISTOGRAM_METRIC(
       kCounterMemoryPushbackLatencyMs, 10'000, 0, 100'000, 50, 90, 99, 100);
+  DEFINE_HISTOGRAM_METRIC(
+      kCounterMemoryPushbackReductionBytes,
+      100l * 1024 * 1024, // 100MB
+      0,
+      15l * 1024 * 1024 * 1024, // 15GB
+      50,
+      90,
+      99,
+      100);
+  DEFINE_HISTOGRAM_METRIC(
+      kCounterMemoryPushbackExpectedReductionBytes,
+      100l * 1024 * 1024, // 100MB
+      0,
+      15l * 1024 * 1024 * 1024, // 15GB
+      50,
+      90,
+      99,
+      100);
+
+  // NOTE: Metrics type exporting for thread pool executor counters are in
+  // PeriodicTaskManager because they have dynamic names and report configs. The
+  // following counters have their type exported there:
+  // [
+  //  kCounterThreadPoolNumThreadsFormat,
+  //  kCounterThreadPoolNumActiveThreadsFormat,
+  //  kCounterThreadPoolNumPendingTasksFormat,
+  //  kCounterThreadPoolNumTotalTasksFormat,
+  //  kCounterThreadPoolMaxIdleTimeNsFormat
+  // ]
 
   // NOTE: Metrics type exporting for file handle cache counters are in
   // PeriodicTaskManager because they have dynamic names. The following counters

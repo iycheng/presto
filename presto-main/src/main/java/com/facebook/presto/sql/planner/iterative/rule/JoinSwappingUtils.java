@@ -17,20 +17,17 @@ package com.facebook.presto.sql.planner.iterative.rule;
 import com.facebook.presto.Session;
 import com.facebook.presto.cost.StatsProvider;
 import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.spi.VariableAllocator;
 import com.facebook.presto.spi.plan.EquiJoinClause;
+import com.facebook.presto.spi.plan.JoinNode;
 import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
-import com.facebook.presto.sql.parser.SqlParser;
-import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.planner.iterative.GroupReference;
 import com.facebook.presto.sql.planner.iterative.Lookup;
 import com.facebook.presto.sql.planner.iterative.Rule;
 import com.facebook.presto.sql.planner.optimizations.StreamPreferredProperties;
 import com.facebook.presto.sql.planner.optimizations.StreamPropertyDerivations;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
-import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.UnnestNode;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
@@ -65,11 +62,10 @@ public class JoinSwappingUtils
     public static Optional<JoinNode> createRuntimeSwappedJoinNode(
             JoinNode joinNode,
             Metadata metadata,
-            SqlParser parser,
             Lookup lookup,
             Session session,
-            VariableAllocator variableAllocator,
-            PlanNodeIdAllocator idAllocator)
+            PlanNodeIdAllocator idAllocator,
+            boolean nativeExecution)
     {
         JoinNode swapped = joinNode.flipChildren();
 
@@ -81,7 +77,7 @@ public class JoinSwappingUtils
         PlanNode resolvedSwappedLeft = lookup.resolve(newLeft);
         if (resolvedSwappedLeft instanceof ExchangeNode && resolvedSwappedLeft.getSources().size() == 1) {
             // Ensure the new probe after skipping the local exchange will satisfy the required probe side property
-            if (checkProbeSidePropertySatisfied(resolvedSwappedLeft.getSources().get(0), metadata, parser, lookup, session, variableAllocator)) {
+            if (checkProbeSidePropertySatisfied(resolvedSwappedLeft.getSources().get(0), metadata, lookup, session, nativeExecution)) {
                 newLeft = resolvedSwappedLeft.getSources().get(0);
                 // The HashGenerationOptimizer will generate hashVariables and append to the output layout of the nodes following the same order. Therefore,
                 // we use the index of the old hashVariable in the ExchangeNode output layout to retrieve the hashVariable from the new left node, and feed
@@ -105,7 +101,7 @@ public class JoinSwappingUtils
                 .map(EquiJoinClause::getRight)
                 .collect(toImmutableList());
         PlanNode newRight = swapped.getRight();
-        if (!checkBuildSidePropertySatisfied(swapped.getRight(), buildJoinVariables, metadata, parser, lookup, session, variableAllocator)) {
+        if (!checkBuildSidePropertySatisfied(swapped.getRight(), buildJoinVariables, metadata, lookup, session, nativeExecution)) {
             if (getTaskConcurrency(session) > 1) {
                 newRight = systemPartitionedExchange(
                         idAllocator.getNextId(),
@@ -137,7 +133,7 @@ public class JoinSwappingUtils
     }
 
     // Check if the new probe side after removing unnecessary local exchange is valid.
-    public static boolean checkProbeSidePropertySatisfied(PlanNode node, Metadata metadata, SqlParser parser, Lookup lookup, Session session, VariableAllocator variableAllocator)
+    public static boolean checkProbeSidePropertySatisfied(PlanNode node, Metadata metadata, Lookup lookup, Session session, boolean nativeExecution)
     {
         StreamPreferredProperties requiredProbeProperty;
         if (isSpillEnabled(session) && isJoinSpillingEnabled(session)) {
@@ -146,7 +142,7 @@ public class JoinSwappingUtils
         else {
             requiredProbeProperty = defaultParallelism(session);
         }
-        StreamPropertyDerivations.StreamProperties nodeProperty = derivePropertiesRecursively(node, metadata, parser, lookup, session, variableAllocator);
+        StreamPropertyDerivations.StreamProperties nodeProperty = derivePropertiesRecursively(node, metadata, lookup, session, nativeExecution);
         return requiredProbeProperty.isSatisfiedBy(nodeProperty);
     }
 
@@ -155,10 +151,9 @@ public class JoinSwappingUtils
             PlanNode node,
             List<VariableReferenceExpression> partitioningColumns,
             Metadata metadata,
-            SqlParser parser,
             Lookup lookup,
             Session session,
-            VariableAllocator variableAllocator)
+            boolean nativeExecution)
     {
         StreamPreferredProperties requiredBuildProperty;
         if (getTaskConcurrency(session) > 1) {
@@ -167,23 +162,22 @@ public class JoinSwappingUtils
         else {
             requiredBuildProperty = singleStream();
         }
-        StreamPropertyDerivations.StreamProperties nodeProperty = derivePropertiesRecursively(node, metadata, parser, lookup, session, variableAllocator);
+        StreamPropertyDerivations.StreamProperties nodeProperty = derivePropertiesRecursively(node, metadata, lookup, session, nativeExecution);
         return requiredBuildProperty.isSatisfiedBy(nodeProperty);
     }
 
     private static StreamPropertyDerivations.StreamProperties derivePropertiesRecursively(
             PlanNode node,
             Metadata metadata,
-            SqlParser parser,
             Lookup lookup,
             Session session,
-            VariableAllocator variableAllocator)
+            boolean nativeExecution)
     {
         PlanNode actual = lookup.resolve(node);
         List<StreamPropertyDerivations.StreamProperties> inputProperties = actual.getSources().stream()
-                .map(source -> derivePropertiesRecursively(source, metadata, parser, lookup, session, variableAllocator))
+                .map(source -> derivePropertiesRecursively(source, metadata, lookup, session, nativeExecution))
                 .collect(toImmutableList());
-        return StreamPropertyDerivations.deriveProperties(actual, inputProperties, metadata, session, TypeProvider.viewOf(variableAllocator.getVariables()), parser);
+        return StreamPropertyDerivations.deriveProperties(actual, inputProperties, metadata, session, nativeExecution);
     }
 
     public static boolean isBelowBroadcastLimit(PlanNode planNode, Rule.Context context)

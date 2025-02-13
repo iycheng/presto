@@ -4,7 +4,7 @@
     <parent>
         <groupId>com.facebook.presto</groupId>
         <artifactId>presto-root</artifactId>
-        <version>0.290-SNAPSHOT</version>
+        <version>0.292-SNAPSHOT</version>
     </parent>
     <artifactId>presto-iceberg</artifactId>
     <description>Presto - Iceberg Connector</description>
@@ -40,16 +40,13 @@
 
         <dependency>
             <groupId>org.apache.parquet</groupId>
-            <artifactId>parquet-format-structures</artifactId>
-            <version>${dep.parquet.version}</version>
-            <scope>runtime</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.parquet</groupId>
             <artifactId>parquet-common</artifactId>
             <version>${dep.parquet.version}</version>
             <exclusions>
+                <exclusion>
+                    <groupId>org.apache.parquet</groupId>
+                    <artifactId>parquet-format-structures</artifactId>
+                </exclusion>
                 <exclusion>
                     <groupId>org.apache.parquet</groupId>
                     <artifactId>parquet-format</artifactId>
@@ -95,7 +92,6 @@
                     <artifactId>animal-sniffer-annotations</artifactId>
                 </exclusion>
             </exclusions>
-            <scope>compile</scope>
         </dependency>
 
         <dependency>
@@ -185,6 +181,11 @@
             <groupId>io.airlift</groupId>
             <artifactId>units</artifactId>
             <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>com.facebook.airlift</groupId>
+            <artifactId>stats</artifactId>
         </dependency>
 
         <dependency>
@@ -458,7 +459,6 @@
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-annotations</artifactId>
-            <version>2.10.2</version>
             <scope>provided</scope>
         </dependency>
 
@@ -510,19 +510,16 @@
             <artifactId>presto-cache</artifactId>
             <scope>compile</scope>
         </dependency>
-        
         <dependency>
             <groupId>com.facebook.presto</groupId>
             <artifactId>presto-main</artifactId>
             <scope>test</scope>
         </dependency>
-
         <dependency>
-          <groupId>com.facebook.presto</groupId>
-          <artifactId>presto-parser</artifactId>
-          <scope>test</scope>
+            <groupId>com.facebook.presto</groupId>
+            <artifactId>presto-parser</artifactId>
+            <scope>test</scope>
         </dependency>
-
         <dependency>
             <groupId>com.facebook.presto</groupId>
             <artifactId>presto-analyzer</artifactId>
@@ -532,6 +529,13 @@
         <dependency>
             <groupId>com.facebook.presto</groupId>
             <artifactId>presto-main</artifactId>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>com.facebook.presto</groupId>
+            <artifactId>presto-hive</artifactId>
             <type>test-jar</type>
             <scope>test</scope>
         </dependency>
@@ -597,7 +601,7 @@
         <dependency>
             <groupId>org.apache.iceberg</groupId>
             <artifactId>iceberg-core</artifactId>
-            <version>1.5.0</version>
+            <version>${dep.iceberg.version}</version>
             <classifier>tests</classifier>
             <scope>test</scope>
             <exclusions>
@@ -626,6 +630,10 @@
                     <artifactId>RoaringBitmap</artifactId>
                 </exclusion>
             </exclusions>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-math3</artifactId>
         </dependency>
     </dependencies>
 
@@ -664,7 +672,6 @@
                             <ignoredClassPattern>module-info</ignoredClassPattern>
                             <ignoredClassPattern>org.apache.avro.*</ignoredClassPattern>
                             <ignoredClassPattern>org.apache.parquet.*</ignoredClassPattern>
-                            <ignoredClassPattern>com.github.benmanes.caffeine.*</ignoredClassPattern>
                             <ignoredClassPattern>META-INF.versions.9.module-info</ignoredClassPattern>
                         </ignoredClassPatterns>
                     </configuration>

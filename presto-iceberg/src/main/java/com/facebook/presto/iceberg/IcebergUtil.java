@@ -69,6 +69,8 @@ import org.apache.iceberg.Table;
 import org.apache.iceberg.TableOperations;
 import org.apache.iceberg.TableProperties;
 import org.apache.iceberg.TableScan;
+import org.apache.iceberg.catalog.Catalog;
+import org.apache.iceberg.catalog.ViewCatalog;
 import org.apache.iceberg.expressions.Expression;
 import org.apache.iceberg.hive.HiveSchemaUtil;
 import org.apache.iceberg.io.CloseableIterable;
@@ -78,6 +80,7 @@ import org.apache.iceberg.types.Types;
 import org.apache.iceberg.types.Types.NestedField;
 import org.apache.iceberg.util.LocationUtil;
 import org.apache.iceberg.util.SnapshotUtil;
+import org.apache.iceberg.view.View;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -127,7 +130,6 @@ import static com.facebook.presto.hive.metastore.MetastoreUtil.TABLE_COMMENT;
 import static com.facebook.presto.iceberg.ExpressionConverter.toIcebergExpression;
 import static com.facebook.presto.iceberg.FileContent.POSITION_DELETES;
 import static com.facebook.presto.iceberg.FileContent.fromIcebergFileContent;
-import static com.facebook.presto.iceberg.FileFormat.PARQUET;
 import static com.facebook.presto.iceberg.IcebergColumnHandle.DATA_SEQUENCE_NUMBER_COLUMN_HANDLE;
 import static com.facebook.presto.iceberg.IcebergColumnHandle.PATH_COLUMN_HANDLE;
 import static com.facebook.presto.iceberg.IcebergErrorCode.ICEBERG_INVALID_FORMAT_VERSION;
@@ -194,6 +196,7 @@ import static org.apache.iceberg.TableProperties.METRICS_MAX_INFERRED_COLUMN_DEF
 import static org.apache.iceberg.TableProperties.ORC_COMPRESSION;
 import static org.apache.iceberg.TableProperties.PARQUET_COMPRESSION;
 import static org.apache.iceberg.TableProperties.UPDATE_MODE;
+import static org.apache.iceberg.TableProperties.UPDATE_MODE_DEFAULT;
 import static org.apache.iceberg.TableProperties.WRITE_LOCATION_PROVIDER_IMPL;
 import static org.apache.iceberg.types.Type.TypeID.BINARY;
 import static org.apache.iceberg.types.Type.TypeID.FIXED;
@@ -213,6 +216,8 @@ public final class IcebergUtil
     public static final int REAL_POSITIVE_INFINITE = 0x7f800000;
     public static final int REAL_NEGATIVE_ZERO = 0x80000000;
     public static final int REAL_NEGATIVE_INFINITE = 0xff800000;
+
+    protected static final String VIEW_OWNER = "view_owner";
 
     private IcebergUtil() {}
 
@@ -249,7 +254,16 @@ public final class IcebergUtil
 
     public static Table getNativeIcebergTable(IcebergNativeCatalogFactory catalogFactory, ConnectorSession session, SchemaTableName table)
     {
-        return catalogFactory.getCatalog(session).loadTable(toIcebergTableIdentifier(table));
+        return catalogFactory.getCatalog(session).loadTable(toIcebergTableIdentifier(table, catalogFactory.isNestedNamespaceEnabled()));
+    }
+
+    public static View getNativeIcebergView(IcebergNativeCatalogFactory catalogFactory, ConnectorSession session, SchemaTableName table)
+    {
+        Catalog catalog = catalogFactory.getCatalog(session);
+        if (!(catalog instanceof ViewCatalog)) {
+            throw new PrestoException(NOT_SUPPORTED, "This connector does not support get views");
+        }
+        return ((ViewCatalog) catalog).loadView(toIcebergTableIdentifier(table, catalogFactory.isNestedNamespaceEnabled()));
     }
 
     public static List<IcebergColumnHandle> getPartitionKeyColumnHandles(IcebergTableHandle tableHandle, Table table, TypeManager typeManager)
@@ -323,10 +337,18 @@ public final class IcebergUtil
 
     public static List<IcebergColumnHandle> getColumns(Schema schema, PartitionSpec partitionSpec, TypeManager typeManager)
     {
+        return getColumns(schema.columns().stream().map(NestedField::fieldId), schema, partitionSpec, typeManager);
+    }
+
+    public static List<IcebergColumnHandle> getColumns(Stream<Integer> fields, Schema schema, PartitionSpec partitionSpec, TypeManager typeManager)
+    {
         Set<String> partitionFieldNames = getPartitionFields(partitionSpec, IDENTITY).keySet();
 
-        return schema.columns().stream()
-                .map(column -> partitionFieldNames.contains(column.name()) ? IcebergColumnHandle.create(column, typeManager, PARTITION_KEY) : IcebergColumnHandle.create(column, typeManager, REGULAR))
+        return fields
+                .map(schema::findField)
+                .map(column -> partitionFieldNames.contains(column.name()) ?
+                        IcebergColumnHandle.create(column, typeManager, PARTITION_KEY) :
+                        IcebergColumnHandle.create(column, typeManager, REGULAR))
                 .collect(toImmutableList());
     }
 
@@ -373,6 +395,11 @@ public final class IcebergUtil
     public static Optional<String> getTableComment(Table table)
     {
         return Optional.ofNullable(table.properties().get(TABLE_COMMENT));
+    }
+
+    public static Optional<String> getViewComment(View view)
+    {
+        return Optional.ofNullable(view.properties().get(TABLE_COMMENT));
     }
 
     private static String quotedTableName(SchemaTableName name)
@@ -438,13 +465,6 @@ public final class IcebergUtil
         }
     }
 
-    public static void verifyTypeSupported(Schema schema)
-    {
-        if (schema.columns().stream().anyMatch(column -> Types.TimestampType.withZone().equals(column.type()))) {
-            throw new PrestoException(NOT_SUPPORTED, format("Iceberg column type %s is not supported", Types.TimestampType.withZone()));
-        }
-    }
-
     public static Map<String, String> createIcebergViewProperties(ConnectorSession session, String prestoVersion)
     {
         return ImmutableMap.<String, String>builder()
@@ -453,6 +473,7 @@ public final class IcebergUtil
                 .put(PRESTO_VERSION_NAME, prestoVersion)
                 .put(PRESTO_QUERY_ID_NAME, session.getQueryId())
                 .put(TABLE_TYPE_PROP, ICEBERG_TABLE_TYPE_VALUE)
+                .put(VIEW_OWNER, session.getUser())
                 .build();
     }
 
@@ -489,7 +510,21 @@ public final class IcebergUtil
         }
     }
 
-    private static boolean isValidPartitionType(FileFormat fileFormat, Type type)
+    public static List<SortField> getSortFields(Table table)
+    {
+        try {
+            return table.sortOrder().fields().stream()
+                    .filter(field -> field.transform().isIdentity())
+                    .map(SortField::fromIceberg)
+                    .collect(toImmutableList());
+        }
+        catch (Exception e) {
+            log.warn(String.format("Unable to fetch sort fields for table %s: %s", table.name(), e.getMessage()));
+            return ImmutableList.of();
+        }
+    }
+
+    private static boolean isValidPartitionType(Type type)
     {
         return type instanceof DecimalType ||
                 BOOLEAN.equals(type) ||
@@ -501,15 +536,15 @@ public final class IcebergUtil
                 DOUBLE.equals(type) ||
                 DATE.equals(type) ||
                 type instanceof TimestampType ||
-                (TIME.equals(type) && fileFormat == PARQUET) ||
+                TIME.equals(type) ||
                 VARBINARY.equals(type) ||
                 isVarcharType(type) ||
                 isCharType(type);
     }
 
-    private static void verifyPartitionTypeSupported(FileFormat fileFormat, String partitionName, Type type)
+    private static void verifyPartitionTypeSupported(String partitionName, Type type)
     {
-        if (!isValidPartitionType(fileFormat, type)) {
+        if (!isValidPartitionType(type)) {
             throw new PrestoException(NOT_SUPPORTED, format("Unsupported type [%s] for partition: %s", type, partitionName));
         }
     }
@@ -520,7 +555,7 @@ public final class IcebergUtil
             Type prestoType,
             String partitionName)
     {
-        verifyPartitionTypeSupported(fileFormat, partitionName, prestoType);
+        verifyPartitionTypeSupported(partitionName, prestoType);
 
         Object partitionValue = deserializePartitionValue(prestoType, partitionStringValue, partitionName);
         return partitionValue == null ? NullableValue.asNull(prestoType) : NullableValue.of(prestoType, partitionValue);
@@ -843,10 +878,10 @@ public final class IcebergUtil
      * @param requestedSchema If provided, only delete files with this schema will be provided
      */
     public static CloseableIterable<DeleteFile> getDeleteFiles(Table table,
-                                                               long snapshot,
-                                                               TupleDomain<IcebergColumnHandle> filter,
-                                                               Optional<Set<Integer>> requestedPartitionSpec,
-                                                               Optional<Set<Integer>> requestedSchema)
+            long snapshot,
+            TupleDomain<IcebergColumnHandle> filter,
+            Optional<Set<Integer>> requestedPartitionSpec,
+            Optional<Set<Integer>> requestedSchema)
     {
         Expression filterExpression = toIcebergExpression(filter);
         CloseableIterable<FileScanTask> fileTasks = table.newScan().useSnapshot(snapshot).filter(filterExpression).planFiles();
@@ -1022,9 +1057,9 @@ public final class IcebergUtil
         private DeleteFile currentFile;
 
         private DeleteFilesIterator(Map<Integer, PartitionSpec> partitionSpecsById,
-                                    CloseableIterator<FileScanTask> fileTasks,
-                                    Optional<Set<Integer>> requestedPartitionSpec,
-                                    Optional<Set<Integer>> requestedSchema)
+                CloseableIterator<FileScanTask> fileTasks,
+                Optional<Set<Integer>> requestedPartitionSpec,
+                Optional<Set<Integer>> requestedSchema)
         {
             this.partitionSpecsById = partitionSpecsById;
             this.fileTasks = fileTasks;
@@ -1124,10 +1159,13 @@ public final class IcebergUtil
 
         if (parseFormatVersion(formatVersion) < MIN_FORMAT_VERSION_FOR_DELETE) {
             propertiesBuilder.put(DELETE_MODE, RowLevelOperationMode.COPY_ON_WRITE.modeName());
+            propertiesBuilder.put(UPDATE_MODE, RowLevelOperationMode.COPY_ON_WRITE.modeName());
         }
         else {
             RowLevelOperationMode deleteMode = IcebergTableProperties.getDeleteMode(tableMetadata.getProperties());
             propertiesBuilder.put(DELETE_MODE, deleteMode.modeName());
+            RowLevelOperationMode updateMode = IcebergTableProperties.getUpdateMode(tableMetadata.getProperties());
+            propertiesBuilder.put(UPDATE_MODE, updateMode.modeName());
         }
 
         Integer metadataPreviousVersionsMax = IcebergTableProperties.getMetadataPreviousVersionsMax(tableMetadata.getProperties());
@@ -1155,6 +1193,13 @@ public final class IcebergUtil
     {
         return RowLevelOperationMode.fromName(table.properties()
                 .getOrDefault(DELETE_MODE, DELETE_MODE_DEFAULT)
+                .toUpperCase(Locale.ENGLISH));
+    }
+
+    public static RowLevelOperationMode getUpdateMode(Table table)
+    {
+        return RowLevelOperationMode.fromName(table.properties()
+                .getOrDefault(UPDATE_MODE, UPDATE_MODE_DEFAULT)
                 .toUpperCase(Locale.ENGLISH));
     }
 
@@ -1208,8 +1253,8 @@ public final class IcebergUtil
 
     /**
      * Get the metadata location for target {@link Table},
-     *  considering iceberg table properties {@code WRITE_METADATA_LOCATION}
-     * */
+     * considering iceberg table properties {@code WRITE_METADATA_LOCATION}
+     */
     public static String metadataLocation(Table icebergTable)
     {
         String metadataLocation = icebergTable.properties().get(TableProperties.WRITE_METADATA_LOCATION);
@@ -1224,8 +1269,8 @@ public final class IcebergUtil
 
     /**
      * Get the data location for target {@link Table},
-     *  considering iceberg table properties {@code WRITE_DATA_LOCATION}, {@code OBJECT_STORE_PATH} and {@code WRITE_FOLDER_STORAGE_LOCATION}
-     * */
+     * considering iceberg table properties {@code WRITE_DATA_LOCATION}, {@code OBJECT_STORE_PATH} and {@code WRITE_FOLDER_STORAGE_LOCATION}
+     */
     public static String dataLocation(Table icebergTable)
     {
         Map<String, String> properties = icebergTable.properties();

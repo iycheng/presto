@@ -21,8 +21,6 @@ import com.facebook.presto.spi.WarningCollector;
 import com.facebook.presto.spi.plan.AggregationNode;
 import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
-import com.facebook.presto.sql.parser.SqlParser;
-import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.planner.optimizations.LocalProperties;
 import com.facebook.presto.sql.planner.optimizations.StreamPropertyDerivations.StreamProperties;
 import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
@@ -43,10 +41,17 @@ import static com.facebook.presto.util.Failures.checkArgument;
 public class ValidateStreamingAggregations
         implements Checker
 {
-    @Override
-    public void validate(PlanNode planNode, Session session, Metadata metadata, SqlParser sqlParser, TypeProvider types, WarningCollector warningCollector)
+    private final boolean nativeExecution;
+
+    public ValidateStreamingAggregations(boolean nativeExecution)
     {
-        planNode.accept(new Visitor(session, metadata, sqlParser, types, warningCollector), null);
+        this.nativeExecution = nativeExecution;
+    }
+
+    @Override
+    public void validate(PlanNode planNode, Session session, Metadata metadata, WarningCollector warningCollector)
+    {
+        planNode.accept(new Visitor(session, metadata, nativeExecution), null);
     }
 
     private static final class Visitor
@@ -54,17 +59,13 @@ public class ValidateStreamingAggregations
     {
         private final Session session;
         private final Metadata metadata;
-        private final SqlParser sqlParser;
-        private final TypeProvider types;
-        private final WarningCollector warningCollector;
+        private final boolean nativeExecution;
 
-        private Visitor(Session session, Metadata metadata, SqlParser sqlParser, TypeProvider types, WarningCollector warningCollector)
+        private Visitor(Session session, Metadata metadata, boolean nativeExecution)
         {
             this.session = session;
             this.metadata = metadata;
-            this.sqlParser = sqlParser;
-            this.types = types;
-            this.warningCollector = warningCollector;
+            this.nativeExecution = nativeExecution;
         }
 
         @Override
@@ -81,7 +82,7 @@ public class ValidateStreamingAggregations
                 return null;
             }
 
-            StreamProperties properties = derivePropertiesRecursively(node.getSource(), metadata, session, types, sqlParser);
+            StreamProperties properties = derivePropertiesRecursively(node.getSource(), metadata, session, nativeExecution);
 
             List<LocalProperty<VariableReferenceExpression>> desiredProperties = ImmutableList.of(new GroupingProperty<>(node.getPreGroupedVariables()));
             Iterator<Optional<LocalProperty<VariableReferenceExpression>>> matchIterator = LocalProperties.match(properties.getLocalProperties(), desiredProperties).iterator();

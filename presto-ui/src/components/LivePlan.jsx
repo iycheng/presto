@@ -15,10 +15,11 @@
 
 import React from "react";
 import ReactDOMServer from "react-dom/server";
-import * as dagreD3 from "dagre-d3";
+import * as dagreD3 from "dagre-d3-es";
 import * as d3 from "d3";
 
-import {formatRows, getStageStateColor, initializeGraph, initializeSvg, truncateString} from "../utils";
+import {formatRows, getStageStateColor, truncateString} from "../utils";
+import {initializeGraph, initializeSvg} from "../d3utils";
 import {QueryHeader} from "./QueryHeader";
 
 type StageStatisticsProps = {
@@ -132,7 +133,7 @@ export class PlanNode extends React.Component<PlanNodeProps, PlanNodeState> {
 
     render(): any {
         return (
-            <div style={{color: "#000"}} data-toggle="tooltip" data-placement="bottom" data-container="body" data-html="true"
+            <div style={{color: "#000"}} data-bs-toggle="tooltip" data-bs-placement="bottom" data-bs-container="body" data-bs-html="true"
                  title={"<h4>" + this.props.name + "</h4>" + this.props.identifier}>
                 <strong>{this.props.name}</strong>
                 <div>
@@ -205,8 +206,8 @@ export class LivePlan extends React.Component<LivePlanProps, LivePlanState> {
             });
     }
 
-    static handleStageClick(stageCssId: string) {
-        window.open("stage.html?" + stageCssId, '_blank');
+    static handleStageClick(stageCssId: any) {
+       window.open("stage.html?" + stageCssId.target.__data__, '_blank');
     }
 
     componentDidMount() {
@@ -291,8 +292,8 @@ export class LivePlan extends React.Component<LivePlanProps, LivePlanState> {
         if (this.state.ended) {
             // Zoom doesn't deal well with DOM changes
             const initialScale = Math.min(width / graphWidth, height / graphHeight);
-            const zoom = d3.zoom().scaleExtent([initialScale, 1]).on("zoom", function () {
-                inner.attr("transform", d3.event.transform);
+            const zoom = d3.zoom().scaleExtent([initialScale, 1]).on("zoom",(event) => {
+                inner.attr("transform", event.transform);
             });
 
             svg.call(zoom);
@@ -309,7 +310,7 @@ export class LivePlan extends React.Component<LivePlanProps, LivePlanState> {
     componentDidUpdate() {
         this.updateD3Graph();
         //$FlowFixMe
-        $('[data-toggle="tooltip"]').tooltip()
+        $('[data-bs-toggle="tooltip"]')?.tooltip()
     }
 
     render(): any {
@@ -322,7 +323,7 @@ export class LivePlan extends React.Component<LivePlanProps, LivePlanState> {
             }
             return (
                 <div className="row error-message">
-                    <div className="col-xs-12"><h4>{label}</h4></div>
+                    <div className="col-12"><h4>{label}</h4></div>
                 </div>
             );
         }
@@ -331,7 +332,7 @@ export class LivePlan extends React.Component<LivePlanProps, LivePlanState> {
         if (query && !query.outputStage) {
             loadingMessage = (
                 <div className="row error-message">
-                    <div className="col-xs-12">
+                    <div className="col-12">
                         <h4>Live plan graph will appear automatically when query starts running.</h4>
                         <div className="loader">Loading...</div>
                     </div>
@@ -339,16 +340,14 @@ export class LivePlan extends React.Component<LivePlanProps, LivePlanState> {
             )
         }
 
-        // TODO: Refactor components to move refreshLoop to parent rather than using this property
-        const queryHeader = this.props.isEmbedded ? null : <QueryHeader query={query}/>;
         return (
             <div>
-                {queryHeader}
+                {!this.props.isEmbedded && <QueryHeader query={query}/>}
                 <div className="row">
-                    <div className="col-xs-12">
+                    <div className="col-12">
                         {loadingMessage}
                         <div id="live-plan" className="graph-container">
-                            <div className="pull-right">
+                            <div className="float-end">
                                 {this.state.ended ? "Scroll to zoom." : "Zoom disabled while query is running." } Click stage to view additional statistics
                             </div>
                             <svg id="plan-canvas"/>
@@ -359,3 +358,5 @@ export class LivePlan extends React.Component<LivePlanProps, LivePlanState> {
         );
     }
 }
+
+export default LivePlan;

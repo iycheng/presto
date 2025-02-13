@@ -14,15 +14,23 @@
 package com.facebook.presto.spi.statistics;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import org.openjdk.jol.info.ClassLayout;
 
 import java.util.Objects;
 import java.util.Optional;
 
+import static com.facebook.presto.spi.statistics.DoubleRange.RANGE_SIZE;
+import static com.facebook.presto.spi.statistics.Estimate.ESTIMATE_SIZE;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
 public final class ColumnStatistics
 {
+    private static final long COLUMN_STATISTICS_SIZE = ClassLayout.parseClass(ColumnStatistics.class).instanceSize();
+    private static final long OPTION_SIZE = ClassLayout.parseClass(Optional.class).instanceSize();
+
+    public static final double INFINITE_TO_FINITE_RANGE_INTERSECT_OVERLAP_HEURISTIC_FACTOR = 0.25;
+    public static final double INFINITE_TO_INFINITE_RANGE_INTERSECT_OVERLAP_HEURISTIC_FACTOR = 0.5;
     private static final ColumnStatistics EMPTY = new ColumnStatistics(Estimate.unknown(), Estimate.unknown(), Estimate.unknown(), Optional.empty(), Optional.empty());
 
     private final Estimate nullsFraction;
@@ -142,6 +150,15 @@ public final class ColumnStatistics
                 .setHistogram(statistics.getHistogram());
     }
 
+    public long getEstimatedSize()
+    {
+        return COLUMN_STATISTICS_SIZE +
+                3 * ESTIMATE_SIZE +
+                2 * OPTION_SIZE +
+                histogram.map(ConnectorHistogram::getEstimatedSize).orElse(0L) +
+                range.map(unused -> RANGE_SIZE).orElse(0L);
+    }
+
     /**
      * If one of the estimates below is unspecified, the default "unknown" estimate value
      * (represented by floating point NaN) may cause the resulting symbol statistics
@@ -207,6 +224,11 @@ public final class ColumnStatistics
         {
             this.histogram = histogram;
             return this;
+        }
+
+        public Optional<ConnectorHistogram> getHistogram()
+        {
+            return histogram;
         }
 
         public Builder mergeWith(Builder other)

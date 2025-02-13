@@ -19,27 +19,36 @@ import com.facebook.presto.cost.PlanNodeStatsEstimate;
 import com.facebook.presto.cost.StatsAndCosts;
 import com.facebook.presto.metadata.FunctionAndTypeManager;
 import com.facebook.presto.spi.ConnectorSession;
+import com.facebook.presto.spi.plan.AbstractJoinNode;
 import com.facebook.presto.spi.plan.AggregationNode;
 import com.facebook.presto.spi.plan.AggregationNode.Aggregation;
+import com.facebook.presto.spi.plan.DeleteNode;
 import com.facebook.presto.spi.plan.DistinctLimitNode;
 import com.facebook.presto.spi.plan.EquiJoinClause;
 import com.facebook.presto.spi.plan.FilterNode;
+import com.facebook.presto.spi.plan.JoinNode;
 import com.facebook.presto.spi.plan.LimitNode;
 import com.facebook.presto.spi.plan.MarkDistinctNode;
+import com.facebook.presto.spi.plan.MergeJoinNode;
 import com.facebook.presto.spi.plan.OutputNode;
+import com.facebook.presto.spi.plan.PlanFragmentId;
 import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.ProjectNode;
+import com.facebook.presto.spi.plan.SemiJoinNode;
 import com.facebook.presto.spi.plan.SortNode;
+import com.facebook.presto.spi.plan.SpatialJoinNode;
+import com.facebook.presto.spi.plan.TableFinishNode;
 import com.facebook.presto.spi.plan.TableScanNode;
+import com.facebook.presto.spi.plan.TableWriterNode;
 import com.facebook.presto.spi.plan.TopNNode;
 import com.facebook.presto.spi.plan.UnionNode;
 import com.facebook.presto.spi.plan.ValuesNode;
+import com.facebook.presto.spi.plan.WindowNode;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
 import com.facebook.presto.sql.planner.PlanFragment;
 import com.facebook.presto.sql.planner.SubPlan;
 import com.facebook.presto.sql.planner.optimizations.JoinNodeUtils;
-import com.facebook.presto.sql.planner.plan.AbstractJoinNode;
 import com.facebook.presto.sql.planner.plan.ApplyNode;
 import com.facebook.presto.sql.planner.plan.AssignUniqueId;
 import com.facebook.presto.sql.planner.plan.EnforceSingleRowNode;
@@ -49,24 +58,17 @@ import com.facebook.presto.sql.planner.plan.GroupIdNode;
 import com.facebook.presto.sql.planner.plan.IndexJoinNode;
 import com.facebook.presto.sql.planner.plan.IndexSourceNode;
 import com.facebook.presto.sql.planner.plan.InternalPlanVisitor;
-import com.facebook.presto.sql.planner.plan.JoinNode;
 import com.facebook.presto.sql.planner.plan.LateralJoinNode;
-import com.facebook.presto.sql.planner.plan.MergeJoinNode;
 import com.facebook.presto.sql.planner.plan.MetadataDeleteNode;
-import com.facebook.presto.sql.planner.plan.PlanFragmentId;
 import com.facebook.presto.sql.planner.plan.RemoteSourceNode;
 import com.facebook.presto.sql.planner.plan.RowNumberNode;
 import com.facebook.presto.sql.planner.plan.SampleNode;
-import com.facebook.presto.sql.planner.plan.SemiJoinNode;
 import com.facebook.presto.sql.planner.plan.SequenceNode;
-import com.facebook.presto.sql.planner.plan.SpatialJoinNode;
 import com.facebook.presto.sql.planner.plan.StatisticsWriterNode;
-import com.facebook.presto.sql.planner.plan.TableFinishNode;
 import com.facebook.presto.sql.planner.plan.TableWriterMergeNode;
-import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.plan.TopNRowNumberNode;
 import com.facebook.presto.sql.planner.plan.UnnestNode;
-import com.facebook.presto.sql.planner.plan.WindowNode;
+import com.facebook.presto.sql.planner.plan.UpdateNode;
 import com.facebook.presto.sql.planner.planPrinter.RowExpressionFormatter;
 import com.facebook.presto.sql.tree.ComparisonExpression;
 import com.facebook.presto.sql.tree.Expression;
@@ -114,6 +116,7 @@ public final class GraphvizPrinter
         SINK,
         WINDOW,
         UNION,
+        DELETE,
 
         SEQUENCE,
         SORT,
@@ -127,6 +130,7 @@ public final class GraphvizPrinter
         UNNEST,
         ANALYZE_FINISH,
         EXPLAIN_ANALYZE,
+        UPDATE,
     }
 
     private static final Map<NodeType, String> NODE_COLORS = immutableEnumMap(ImmutableMap.<NodeType, String>builder()
@@ -145,6 +149,7 @@ public final class GraphvizPrinter
             .put(NodeType.SINK, "indianred1")
             .put(NodeType.WINDOW, "darkolivegreen4")
             .put(NodeType.UNION, "turquoise4")
+            .put(NodeType.DELETE, "tomato")
             .put(NodeType.SEQUENCE, "turquoise4")
             .put(NodeType.MARK_DISTINCT, "violet")
             .put(NodeType.TABLE_WRITER, "cyan")
@@ -156,6 +161,7 @@ public final class GraphvizPrinter
             .put(NodeType.SAMPLE, "goldenrod4")
             .put(NodeType.ANALYZE_FINISH, "plum")
             .put(NodeType.EXPLAIN_ANALYZE, "cadetblue1")
+            .put(NodeType.UPDATE, "blue")
             .build());
 
     static {
@@ -309,6 +315,13 @@ public final class GraphvizPrinter
         }
 
         @Override
+        public Void visitUpdate(UpdateNode node, Void context)
+        {
+            printNode(node, format("UpdateNode[%s]", Joiner.on(", ").join(node.getOutputVariables())), NODE_COLORS.get(NodeType.UPDATE));
+            return node.getSource().accept(this, context);
+        }
+
+        @Override
         public Void visitStatisticsWriterNode(StatisticsWriterNode node, Void context)
         {
             printNode(node, format("StatisticsWriterNode[%s]", Joiner.on(", ").join(node.getOutputVariables())), NODE_COLORS.get(NodeType.ANALYZE_FINISH));
@@ -361,10 +374,10 @@ public final class GraphvizPrinter
         public Void visitWindow(WindowNode node, Void context)
         {
             printNode(node, "Window", format("partition by = %s|order by = %s",
-                    Joiner.on(", ").join(node.getPartitionBy()),
-                    node.getOrderingScheme()
-                            .map(orderingScheme -> Joiner.on(", ").join(orderingScheme.getOrderByVariables()))
-                            .orElse("")),
+                            Joiner.on(", ").join(node.getPartitionBy()),
+                            node.getOrderingScheme()
+                                    .map(orderingScheme -> Joiner.on(", ").join(orderingScheme.getOrderByVariables()))
+                                    .orElse("")),
                     NODE_COLORS.get(NodeType.WINDOW));
             return node.getSource().accept(this, context);
         }
@@ -680,6 +693,16 @@ public final class GraphvizPrinter
             node.getProbeSource().accept(this, context);
             node.getIndexSource().accept(this, context);
 
+            return null;
+        }
+
+        @Override
+        public Void visitDelete(DeleteNode node, Void context)
+        {
+            String deleteLabel = format("Delete[%s]", Joiner.on(",").join(node.getOutputVariables()));
+            printNode(node, deleteLabel, NODE_COLORS.get(NodeType.DELETE));
+
+            node.getSource().accept(this, context);
             return null;
         }
 
