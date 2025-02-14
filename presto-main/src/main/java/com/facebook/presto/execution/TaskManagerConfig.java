@@ -51,6 +51,7 @@ public class TaskManagerConfig
     private boolean statisticsCpuTimerEnabled = true;
     private boolean perOperatorAllocationTrackingEnabled;
     private boolean taskAllocationTrackingEnabled;
+    private boolean taskUpdateSizeTrackingEnabled = true;
     private DataSize maxPartialAggregationMemoryUsage = new DataSize(16, Unit.MEGABYTE);
     private DataSize maxLocalExchangeBufferSize = new DataSize(32, Unit.MEGABYTE);
     private DataSize maxIndexMemoryUsage = new DataSize(64, Unit.MEGABYTE);
@@ -428,14 +429,14 @@ public class TaskManagerConfig
     }
 
     @Min(1)
-    @PowerOfTwo
     public int getWriterCount()
     {
         return writerCount;
     }
 
+    // NOTE: writer count needs to be a power of two for java query engine.
     @Config("task.writer-count")
-    @ConfigDescription("Number of writers per task")
+    @ConfigDescription("Number of writer threads per task")
     public TaskManagerConfig setWriterCount(int writerCount)
     {
         this.writerCount = writerCount;
@@ -443,14 +444,14 @@ public class TaskManagerConfig
     }
 
     @Min(1)
-    @PowerOfTwo
     public Integer getPartitionedWriterCount()
     {
         return partitionedWriterCount;
     }
 
+    // NOTE: partitioned writer count needs to be a power of two for java query engine.
     @Config("task.partitioned-writer-count")
-    @ConfigDescription("Number of writers per task for partitioned writes. If not set, the number set by task.writer-count will be used")
+    @ConfigDescription("Number of writer threads per task for partitioned writes. If not set, the number set by task.writer-count will be used")
     public TaskManagerConfig setPartitionedWriterCount(Integer partitionedWriterCount)
     {
         this.partitionedWriterCount = partitionedWriterCount;
@@ -664,6 +665,18 @@ public class TaskManagerConfig
     public TaskManagerConfig setHighMemoryTaskKillerStrategy(HighMemoryTaskKillerStrategy highMemoryTaskKillerStrategy)
     {
         this.highMemoryTaskKillerStrategy = highMemoryTaskKillerStrategy;
+        return this;
+    }
+
+    public boolean isTaskUpdateSizeTrackingEnabled()
+    {
+        return taskUpdateSizeTrackingEnabled;
+    }
+
+    @Config("task.update-size-tracking-enabled")
+    public TaskManagerConfig setTaskUpdateSizeTrackingEnabled(boolean taskUpdateSizeTrackingEnabled)
+    {
+        this.taskUpdateSizeTrackingEnabled = taskUpdateSizeTrackingEnabled;
         return this;
     }
 }

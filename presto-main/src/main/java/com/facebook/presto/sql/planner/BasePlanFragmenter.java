@@ -19,7 +19,6 @@ import com.facebook.presto.cost.StatsAndCosts;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.PartitioningMetadata;
 import com.facebook.presto.metadata.TableLayout;
-import com.facebook.presto.operator.StageExecutionDescriptor;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.PrestoException;
@@ -27,24 +26,27 @@ import com.facebook.presto.spi.TableHandle;
 import com.facebook.presto.spi.VariableAllocator;
 import com.facebook.presto.spi.WarningCollector;
 import com.facebook.presto.spi.plan.OutputNode;
+import com.facebook.presto.spi.plan.Partitioning;
+import com.facebook.presto.spi.plan.PartitioningHandle;
+import com.facebook.presto.spi.plan.PartitioningScheme;
+import com.facebook.presto.spi.plan.PlanFragmentId;
 import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeId;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
+import com.facebook.presto.spi.plan.StageExecutionDescriptor;
+import com.facebook.presto.spi.plan.TableFinishNode;
 import com.facebook.presto.spi.plan.TableScanNode;
+import com.facebook.presto.spi.plan.TableWriterNode;
 import com.facebook.presto.spi.plan.ValuesNode;
 import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
-import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.plan.ExchangeNode;
 import com.facebook.presto.sql.planner.plan.ExplainAnalyzeNode;
 import com.facebook.presto.sql.planner.plan.MetadataDeleteNode;
-import com.facebook.presto.sql.planner.plan.PlanFragmentId;
 import com.facebook.presto.sql.planner.plan.RemoteSourceNode;
 import com.facebook.presto.sql.planner.plan.SequenceNode;
 import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
 import com.facebook.presto.sql.planner.plan.StatisticsWriterNode;
-import com.facebook.presto.sql.planner.plan.TableFinishNode;
-import com.facebook.presto.sql.planner.plan.TableWriterNode;
 import com.facebook.presto.sql.planner.sanity.PlanChecker;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
@@ -52,7 +54,6 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -60,6 +61,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static com.facebook.presto.SystemSessionProperties.isForceSingleNodeOutput;
+import static com.facebook.presto.SystemSessionProperties.isSingleNodeExecutionEnabled;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.facebook.presto.sql.TemporaryTableUtil.assignPartitioningVariables;
 import static com.facebook.presto.sql.TemporaryTableUtil.assignTemporaryTableColumnNames;
@@ -73,6 +75,7 @@ import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SINGLE_DI
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.SOURCE_DISTRIBUTION;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.isCompatibleSystemPartitioning;
 import static com.facebook.presto.sql.planner.VariablesExtractor.extractOutputVariables;
+import static com.facebook.presto.sql.planner.optimizations.PartitioningUtils.translateOutputLayout;
 import static com.facebook.presto.sql.planner.plan.ExchangeNode.Scope.REMOTE_MATERIALIZED;
 import static com.facebook.presto.sql.planner.plan.ExchangeNode.Scope.REMOTE_STREAMING;
 import static com.facebook.presto.sql.planner.plan.ExchangeNode.Type.REPARTITION;
@@ -97,11 +100,8 @@ public abstract class BasePlanFragmenter
     private final StatsAndCosts statsAndCosts;
     private final PlanChecker planChecker;
     private final WarningCollector warningCollector;
-    private final SqlParser sqlParser;
     private final Set<PlanNodeId> outputTableWriterNodeIds;
     private final StatisticsAggregationPlanner statisticsAggregationPlanner;
-
-    private Map<String, TableScanNode> cteNameToTableScanMap = new HashMap<>();
 
     public BasePlanFragmenter(
             Session session,
@@ -109,7 +109,6 @@ public abstract class BasePlanFragmenter
             StatsAndCosts statsAndCosts,
             PlanChecker planChecker,
             WarningCollector warningCollector,
-            SqlParser sqlParser,
             PlanNodeIdAllocator idAllocator,
             VariableAllocator variableAllocator,
             Set<PlanNodeId> outputTableWriterNodeIds)
@@ -119,7 +118,6 @@ public abstract class BasePlanFragmenter
         this.statsAndCosts = requireNonNull(statsAndCosts, "statsAndCosts is null");
         this.planChecker = requireNonNull(planChecker, "planChecker is null");
         this.warningCollector = requireNonNull(warningCollector, "warningCollector is null");
-        this.sqlParser = requireNonNull(sqlParser, "sqlParser is null");
         this.idAllocator = requireNonNull(idAllocator, "idAllocator is null");
         this.variableAllocator = requireNonNull(variableAllocator, "variableAllocator is null");
         this.outputTableWriterNodeIds = ImmutableSet.copyOf(requireNonNull(outputTableWriterNodeIds, "outputTableWriterNodeIds is null"));
@@ -143,8 +141,6 @@ public abstract class BasePlanFragmenter
                 properties.getPartitionedSources());
 
         Set<VariableReferenceExpression> fragmentVariableTypes = extractOutputVariables(root);
-        planChecker.validatePlanFragment(root, session, metadata, sqlParser, TypeProvider.fromVariables(fragmentVariableTypes), warningCollector);
-
         Set<PlanNodeId> tableWriterNodeIds = PlanFragmenterUtils.getTableWriterNodeIds(root);
         boolean outputTableWriterFragment = tableWriterNodeIds.stream().anyMatch(outputTableWriterNodeIds::contains);
         if (outputTableWriterFragment) {
@@ -167,6 +163,8 @@ public abstract class BasePlanFragmenter
                 Optional.of(statsAndCosts.getForSubplan(root)),
                 Optional.of(jsonFragmentPlan(root, fragmentVariableTypes, statsAndCosts.getForSubplan(root), metadata.getFunctionAndTypeManager(), session)));
 
+        planChecker.validatePlanFragment(fragment, session, metadata, warningCollector);
+
         return new SubPlan(fragment, properties.getChildren());
     }
 
@@ -174,6 +172,10 @@ public abstract class BasePlanFragmenter
     public PlanNode visitOutput(OutputNode node, RewriteContext<FragmentProperties> context)
     {
         if (isForceSingleNodeOutput(session)) {
+            context.get().setSingleNodeDistribution();
+        }
+
+        if (isSingleNodeExecutionEnabled(session)) {
             context.get().setSingleNodeDistribution();
         }
 
@@ -255,11 +257,8 @@ public abstract class BasePlanFragmenter
     @Override
     public PlanNode visitTableWriter(TableWriterNode node, RewriteContext<FragmentProperties> context)
     {
-        if (node.getTablePartitioningScheme().isPresent()) {
+        if (node.isSingleWriterPerPartitionRequired()) {
             context.get().setDistribution(node.getTablePartitioningScheme().get().getPartitioning().getHandle(), metadata, session);
-        }
-        if (node.getPreferredShufflePartitioningScheme().isPresent()) {
-            context.get().setDistribution(node.getPreferredShufflePartitioningScheme().get().getPartitioning().getHandle(), metadata, session);
         }
         return context.defaultRewrite(node, context.get());
     }
@@ -274,6 +273,10 @@ public abstract class BasePlanFragmenter
     @Override
     public PlanNode visitExchange(ExchangeNode exchange, RewriteContext<FragmentProperties> context)
     {
+        if (isSingleNodeExecutionEnabled(session)) {
+            context.get().setSingleNodeDistribution();
+        }
+
         switch (exchange.getScope()) {
             case LOCAL:
                 return context.defaultRewrite(exchange, context.get());
@@ -289,6 +292,7 @@ public abstract class BasePlanFragmenter
     private PlanNode createRemoteStreamingExchange(ExchangeNode exchange, RewriteContext<FragmentProperties> context)
     {
         checkArgument(exchange.getScope() == REMOTE_STREAMING, "Unexpected exchange scope: %s", exchange.getScope());
+        checkArgument(!exchange.getPartitioningScheme().isScaleWriters(), "task scaling for partitioned tables is not yet supported");
 
         PartitioningScheme partitioningScheme = exchange.getPartitioningScheme();
 
@@ -296,7 +300,7 @@ public abstract class BasePlanFragmenter
 
         ImmutableList.Builder<SubPlan> builder = ImmutableList.builder();
         for (int sourceIndex = 0; sourceIndex < exchange.getSources().size(); sourceIndex++) {
-            FragmentProperties childProperties = new FragmentProperties(partitioningScheme.translateOutputLayout(exchange.getInputs().get(sourceIndex)));
+            FragmentProperties childProperties = new FragmentProperties(translateOutputLayout(partitioningScheme, exchange.getInputs().get(sourceIndex)));
             builder.add(buildSubPlan(exchange.getSources().get(sourceIndex), childProperties, context));
         }
 
@@ -308,7 +312,16 @@ public abstract class BasePlanFragmenter
                 .map(PlanFragment::getId)
                 .collect(toImmutableList());
 
-        return new RemoteSourceNode(exchange.getSourceLocation(), exchange.getId(), exchange.getStatsEquivalentPlanNode(), childrenIds, exchange.getOutputVariables(), exchange.isEnsureSourceOrdering(), exchange.getOrderingScheme(), exchange.getType());
+        return new RemoteSourceNode(
+                exchange.getSourceLocation(),
+                exchange.getId(),
+                exchange.getStatsEquivalentPlanNode(),
+                childrenIds,
+                exchange.getOutputVariables(),
+                exchange.isEnsureSourceOrdering(),
+                exchange.getOrderingScheme(),
+                exchange.getType(),
+                exchange.getPartitioningScheme().getEncoding());
     }
 
     protected void setDistributionForExchange(ExchangeNode.Type exchangeType, PartitioningScheme partitioningScheme, RewriteContext<FragmentProperties> context)
@@ -325,6 +338,8 @@ public abstract class BasePlanFragmenter
     {
         checkArgument(exchange.getType() == REPARTITION, "Unexpected exchange type: %s", exchange.getType());
         checkArgument(exchange.getScope() == REMOTE_MATERIALIZED, "Unexpected exchange scope: %s", exchange.getScope());
+
+        checkArgument(!exchange.getPartitioningScheme().isScaleWriters(), "task scaling for partitioned tables is not yet supported");
 
         PartitioningScheme partitioningScheme = exchange.getPartitioningScheme();
 
@@ -371,7 +386,8 @@ public abstract class BasePlanFragmenter
                 temporaryTableHandle,
                 exchange.getOutputVariables(),
                 variableToColumnMap,
-                Optional.of(partitioningMetadata));
+                Optional.of(partitioningMetadata),
+                Optional.empty());
 
         checkArgument(
                 !exchange.getPartitioningScheme().isReplicateNullsAndAny(),

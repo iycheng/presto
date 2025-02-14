@@ -22,12 +22,13 @@ import com.facebook.presto.parquet.batchreader.Int32FlatBatchReader;
 import com.facebook.presto.parquet.batchreader.Int32NestedBatchReader;
 import com.facebook.presto.parquet.batchreader.Int64FlatBatchReader;
 import com.facebook.presto.parquet.batchreader.Int64NestedBatchReader;
-import com.facebook.presto.parquet.batchreader.Int64TimestampMicrosFlatBatchReader;
-import com.facebook.presto.parquet.batchreader.Int64TimestampMicrosNestedBatchReader;
+import com.facebook.presto.parquet.batchreader.Int64TimeAndTimestampMicrosFlatBatchReader;
+import com.facebook.presto.parquet.batchreader.Int64TimeAndTimestampMicrosNestedBatchReader;
 import com.facebook.presto.parquet.batchreader.LongDecimalFlatBatchReader;
 import com.facebook.presto.parquet.batchreader.ShortDecimalFlatBatchReader;
 import com.facebook.presto.parquet.batchreader.TimestampFlatBatchReader;
 import com.facebook.presto.parquet.batchreader.TimestampNestedBatchReader;
+import com.facebook.presto.parquet.batchreader.UuidFlatBatchReader;
 import com.facebook.presto.parquet.reader.AbstractColumnReader;
 import com.facebook.presto.parquet.reader.BinaryColumnReader;
 import com.facebook.presto.parquet.reader.BooleanColumnReader;
@@ -47,22 +48,23 @@ import java.util.Optional;
 
 import static com.facebook.presto.parquet.ParquetTypeUtils.isDecimalType;
 import static com.facebook.presto.parquet.ParquetTypeUtils.isShortDecimalType;
+import static com.facebook.presto.parquet.ParquetTypeUtils.isTimeMicrosType;
 import static com.facebook.presto.parquet.ParquetTypeUtils.isTimeStampMicrosType;
+import static com.facebook.presto.parquet.ParquetTypeUtils.isUuidType;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
-import static org.apache.parquet.schema.OriginalType.TIMESTAMP_MICROS;
-import static org.apache.parquet.schema.OriginalType.TIME_MICROS;
 
 public class ColumnReaderFactory
 {
     private static final Logger log = Logger.get(ColumnReaderFactory.class);
+
     private ColumnReaderFactory()
     {
     }
 
     public static ColumnReader createReader(RichColumnDescriptor descriptor, boolean batchReadEnabled)
     {
-        if (batchReadEnabled) {
-            final boolean isNested = descriptor.getPath().length > 1;
+        final boolean isNested = descriptor.getPath().length > 1;
+        if (batchReadEnabled && (!(isNested && isDecimalType(descriptor)))) {
             switch (descriptor.getPrimitiveType().getPrimitiveTypeName()) {
                 case BOOLEAN:
                     return isNested ? new BooleanNestedBatchReader(descriptor) : new BooleanFlatBatchReader(descriptor);
@@ -73,8 +75,8 @@ public class ColumnReaderFactory
                 case FLOAT:
                     return isNested ? new Int32NestedBatchReader(descriptor) : new Int32FlatBatchReader(descriptor);
                 case INT64:
-                    if (isTimeStampMicrosType(descriptor)) {
-                        return isNested ? new Int64TimestampMicrosNestedBatchReader(descriptor) : new Int64TimestampMicrosFlatBatchReader(descriptor);
+                    if (isTimeStampMicrosType(descriptor) || isTimeMicrosType(descriptor)) {
+                        return isNested ? new Int64TimeAndTimestampMicrosNestedBatchReader(descriptor) : new Int64TimeAndTimestampMicrosFlatBatchReader(descriptor);
                     }
 
                     if (!isNested && isShortDecimalType(descriptor)) {
@@ -97,6 +99,10 @@ public class ColumnReaderFactory
                     return isNested ? new BinaryNestedBatchReader(descriptor) : new BinaryFlatBatchReader(descriptor);
                 case FIXED_LEN_BYTE_ARRAY:
                     if (!isNested) {
+                        if (isUuidType(descriptor)) {
+                            return new UuidFlatBatchReader(descriptor);
+                        }
+
                         decimalBatchColumnReader = createDecimalBatchColumnReader(descriptor);
                         if (decimalBatchColumnReader.isPresent()) {
                             return decimalBatchColumnReader.get();
@@ -109,15 +115,15 @@ public class ColumnReaderFactory
             case BOOLEAN:
                 return new BooleanColumnReader(descriptor);
             case INT32:
-                return createDecimalColumnReader(descriptor).orElse(new IntColumnReader(descriptor));
+                return createDecimalColumnReader(descriptor).orElseGet(() -> new IntColumnReader(descriptor));
             case INT64:
-                if (TIMESTAMP_MICROS.equals(descriptor.getPrimitiveType().getOriginalType())) {
+                if (isTimeStampMicrosType(descriptor)) {
                     return new LongTimestampMicrosColumnReader(descriptor);
                 }
-                if (TIME_MICROS.equals(descriptor.getPrimitiveType().getOriginalType())) {
+                if (isTimeMicrosType(descriptor)) {
                     return new LongTimeMicrosColumnReader(descriptor);
                 }
-                return createDecimalColumnReader(descriptor).orElse(new LongColumnReader(descriptor));
+                return createDecimalColumnReader(descriptor).orElseGet(() -> new LongColumnReader(descriptor));
             case INT96:
                 return new TimestampColumnReader(descriptor);
             case FLOAT:
@@ -125,12 +131,15 @@ public class ColumnReaderFactory
             case DOUBLE:
                 return new DoubleColumnReader(descriptor);
             case BINARY:
-                return createDecimalColumnReader(descriptor).orElse(new BinaryColumnReader(descriptor));
+                return createDecimalColumnReader(descriptor).orElseGet(() -> new BinaryColumnReader(descriptor));
             case FIXED_LEN_BYTE_ARRAY:
+                if (isUuidType(descriptor)) {
+                    return new BinaryColumnReader(descriptor);
+                }
                 return createDecimalColumnReader(descriptor)
                         .orElseThrow(() -> new PrestoException(NOT_SUPPORTED, " type FIXED_LEN_BYTE_ARRAY supported as DECIMAL; got " + descriptor.getPrimitiveType().getOriginalType()));
             default:
-                throw new PrestoException(NOT_SUPPORTED, "Unsupported parquet type: " + descriptor.getType());
+                throw new PrestoException(NOT_SUPPORTED, "Unsupported parquet type: " + descriptor.getPrimitiveType().getPrimitiveTypeName());
         }
     }
 

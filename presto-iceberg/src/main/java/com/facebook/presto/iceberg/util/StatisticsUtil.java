@@ -22,6 +22,7 @@ import com.facebook.presto.iceberg.IcebergColumnHandle;
 import com.facebook.presto.iceberg.IcebergTableHandle;
 import com.facebook.presto.iceberg.IcebergTableLayoutHandle;
 import com.facebook.presto.iceberg.TableStatisticsMaker;
+import com.facebook.presto.iceberg.statistics.StatisticsFileCache;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorTableLayoutHandle;
@@ -102,6 +103,7 @@ public final class StatisticsUtil
                     .setRange(icebergColumnStats.getRange())
                     .setNullsFraction(icebergColumnStats.getNullsFraction())
                     .setDistinctValuesCount(icebergColumnStats.getDistinctValuesCount())
+                    .setHistogram(icebergColumnStats.getHistogram())
                     .setRange(icebergColumnStats.getRange());
             if (hiveColumnStats != null) {
                 // NDVs
@@ -131,7 +133,7 @@ public final class StatisticsUtil
                         .collect(Collectors.toSet()))
                 .filter(set -> !set.isEmpty())
                 .map(EnumSet::copyOf)
-                .orElse(EnumSet.noneOf(ColumnStatisticType.class));
+                .orElseGet(() -> EnumSet.noneOf(ColumnStatisticType.class));
     }
 
     public static String encodeMergeFlags(EnumSet<ColumnStatisticType> flags)
@@ -214,6 +216,7 @@ public final class StatisticsUtil
             ConnectorMetadata metadata,
             TypeManager typeManager,
             ConnectorSession session,
+            StatisticsFileCache statisticsFileCache,
             IcebergTableHandle tableHandle,
             Optional<ConnectorTableLayoutHandle> tableLayoutHandle,
             List<ColumnHandle> columnHandles,
@@ -226,6 +229,7 @@ public final class StatisticsUtil
                         .collect(toImmutableList()),
                 tableLayoutHandle.map(IcebergTableLayoutHandle.class::cast));
         return TableStatisticsMaker.getTableStatistics(session, typeManager,
+                statisticsFileCache,
                 tableLayoutHandle
                         .map(IcebergTableLayoutHandle.class::cast)
                         .map(IcebergTableLayoutHandle::getValidPredicate),

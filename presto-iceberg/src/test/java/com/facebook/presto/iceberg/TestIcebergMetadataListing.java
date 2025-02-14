@@ -39,6 +39,8 @@ import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 public class TestIcebergMetadataListing
         extends AbstractTestQueryFramework
 {
+    private static final int TEST_TIMEOUT = 10_000;
+
     @Override
     protected QueryRunner createQueryRunner()
             throws Exception
@@ -61,7 +63,7 @@ public class TestIcebergMetadataListing
         Map<String, String> icebergProperties = ImmutableMap.<String, String>builder()
                 .put("hive.metastore", "file")
                 .put("hive.metastore.catalog.dir", catalogDirectory.toFile().toURI().toString())
-                .put("iceberg.hive.table-refresh.max-retry-time", "500ms") // improves test time for testTableDropWithMissingMetadata
+                .put("iceberg.hive.table-refresh.max-retry-time", "20s") // improves test time for testTableDropWithMissingMetadata
                 .build();
 
         queryRunner.createCatalog(ICEBERG_CATALOG, "iceberg", icebergProperties);
@@ -120,7 +122,12 @@ public class TestIcebergMetadataListing
         assertQuery("DESCRIBE iceberg.test_schema.iceberg_table1", "VALUES ('_string', 'varchar', '', ''), ('_integer', 'integer', '', '')");
     }
 
-    @Test
+    /*
+     * The property iceberg.hive.table-refresh.max-retry-time is important for controlling the maximum retry duration
+     * when refreshing Iceberg table metadata. If this test fails, check the refreshFromMetadataLocation method
+     * in HiveTableOperations.
+     */
+    @Test(timeOut = TEST_TIMEOUT)
     public void testTableDropWithMissingMetadata()
     {
         assertQuerySucceeds("CREATE SCHEMA hive.test_metadata_schema");
@@ -146,5 +153,29 @@ public class TestIcebergMetadataListing
     {
         assertQuerySucceeds("SELECT * FROM iceberg.test_schema.iceberg_table1");
         assertQueryFails("SELECT * FROM iceberg.test_schema.hive_table", "Not an Iceberg table: test_schema.hive_table");
+    }
+
+    @Test
+    public void testRenameView()
+    {
+        assertQuerySucceeds("CREATE SCHEMA iceberg.test_rename_view_schema");
+        assertQuerySucceeds("CREATE TABLE iceberg.test_rename_view_schema.iceberg_test_table (_string VARCHAR, _integer INTEGER)");
+        assertUpdate("CREATE VIEW iceberg.test_rename_view_schema.test_view_to_be_renamed AS SELECT * FROM iceberg.test_rename_view_schema.iceberg_test_table");
+        assertUpdate("ALTER VIEW IF EXISTS iceberg.test_rename_view_schema.test_view_to_be_renamed RENAME TO iceberg.test_rename_view_schema.test_view_renamed");
+        assertUpdate("CREATE VIEW iceberg.test_rename_view_schema.test_view2_to_be_renamed AS SELECT * FROM iceberg.test_rename_view_schema.iceberg_test_table");
+        assertUpdate("ALTER VIEW iceberg.test_rename_view_schema.test_view2_to_be_renamed RENAME TO iceberg.test_rename_view_schema.test_view2_renamed");
+        assertQuerySucceeds("SELECT * FROM iceberg.test_rename_view_schema.test_view_renamed");
+        assertQuerySucceeds("SELECT * FROM iceberg.test_rename_view_schema.test_view2_renamed");
+        assertUpdate("DROP VIEW iceberg.test_rename_view_schema.test_view_renamed");
+        assertUpdate("DROP VIEW iceberg.test_rename_view_schema.test_view2_renamed");
+        assertUpdate("DROP TABLE iceberg.test_rename_view_schema.iceberg_test_table");
+        assertQuerySucceeds("DROP SCHEMA IF EXISTS iceberg.test_rename_view_schema");
+    }
+
+    @Test
+    public void testRenameViewIfNotExists()
+    {
+        assertQueryFails("ALTER VIEW iceberg.test_schema.test_rename_view_not_exist RENAME TO iceberg.test_schema.test_renamed_view_not_exist", "line 1:1: View 'iceberg.test_schema.test_rename_view_not_exist' does not exist");
+        assertQuerySucceeds("ALTER VIEW IF EXISTS iceberg.test_schema.test_rename_view_not_exist RENAME TO iceberg.test_schema.test_renamed_view_not_exist");
     }
 }

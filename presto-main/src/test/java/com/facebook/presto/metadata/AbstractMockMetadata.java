@@ -27,6 +27,7 @@ import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.Constraint;
 import com.facebook.presto.spi.MaterializedViewDefinition;
+import com.facebook.presto.spi.NewTableLayout;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.SystemTable;
 import com.facebook.presto.spi.TableHandle;
@@ -38,6 +39,7 @@ import com.facebook.presto.spi.connector.ConnectorOutputMetadata;
 import com.facebook.presto.spi.connector.ConnectorTableVersion;
 import com.facebook.presto.spi.constraints.TableConstraint;
 import com.facebook.presto.spi.function.SqlFunction;
+import com.facebook.presto.spi.plan.PartitioningHandle;
 import com.facebook.presto.spi.security.GrantInfo;
 import com.facebook.presto.spi.security.PrestoPrincipal;
 import com.facebook.presto.spi.security.Privilege;
@@ -45,7 +47,6 @@ import com.facebook.presto.spi.security.RoleGrant;
 import com.facebook.presto.spi.statistics.ComputedStatistics;
 import com.facebook.presto.spi.statistics.TableStatistics;
 import com.facebook.presto.spi.statistics.TableStatisticsMetadata;
-import com.facebook.presto.sql.planner.PartitioningHandle;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.slice.Slice;
 
@@ -284,6 +285,12 @@ public abstract class AbstractMockMetadata
     }
 
     @Override
+    public void setTableProperties(Session session, TableHandle tableHandle, Map<String, Object> properties)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public void renameColumn(Session session, TableHandle tableHandle, ColumnHandle source, String target)
     {
         throw new UnsupportedOperationException();
@@ -314,12 +321,6 @@ public abstract class AbstractMockMetadata
     }
 
     @Override
-    public Optional<NewTableLayout> getPreferredShuffleLayoutForNewTable(Session session, String catalogName, ConnectorTableMetadata tableMetadata)
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
     public OutputTableHandle beginCreateTable(Session session, String catalogName, ConnectorTableMetadata tableMetadata, Optional<NewTableLayout> layout)
     {
         throw new UnsupportedOperationException();
@@ -333,12 +334,6 @@ public abstract class AbstractMockMetadata
 
     @Override
     public Optional<NewTableLayout> getInsertLayout(Session session, TableHandle target)
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public Optional<NewTableLayout> getPreferredShuffleLayoutForInsert(Session session, TableHandle target)
     {
         throw new UnsupportedOperationException();
     }
@@ -465,6 +460,12 @@ public abstract class AbstractMockMetadata
 
     @Override
     public void createView(Session session, String catalogName, ConnectorTableMetadata viewMetadata, String viewData, boolean replace)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public void renameView(Session session, QualifiedObjectName source, QualifiedObjectName target)
     {
         throw new UnsupportedOperationException();
     }

@@ -40,8 +40,10 @@ import static com.facebook.presto.common.type.Decimals.MAX_SHORT_PRECISION;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static java.util.stream.Collectors.joining;
+import static org.apache.parquet.schema.LogicalTypeAnnotation.uuidType;
 import static org.apache.parquet.schema.OriginalType.DECIMAL;
 import static org.apache.parquet.schema.OriginalType.TIMESTAMP_MICROS;
+import static org.apache.parquet.schema.OriginalType.TIME_MICROS;
 import static org.apache.parquet.schema.Type.Repetition.REPEATED;
 
 public final class ParquetTypeUtils
@@ -336,6 +338,11 @@ public final class ParquetTypeUtils
         return TIMESTAMP_MICROS.equals(descriptor.getPrimitiveType().getOriginalType());
     }
 
+    public static boolean isTimeMicrosType(ColumnDescriptor descriptor)
+    {
+        return TIME_MICROS.equals(descriptor.getPrimitiveType().getOriginalType());
+    }
+
     public static boolean isShortDecimalType(ColumnDescriptor descriptor)
     {
         LogicalTypeAnnotation logicalTypeAnnotation = descriptor.getPrimitiveType().getLogicalTypeAnnotation();
@@ -345,6 +352,11 @@ public final class ParquetTypeUtils
 
         DecimalLogicalTypeAnnotation decimalLogicalTypeAnnotation = (DecimalLogicalTypeAnnotation) logicalTypeAnnotation;
         return decimalLogicalTypeAnnotation.getPrecision() <= MAX_SHORT_PRECISION;
+    }
+
+    public static boolean isUuidType(ColumnDescriptor columnDescriptor)
+    {
+        return uuidType().equals(columnDescriptor.getPrimitiveType().getLogicalTypeAnnotation());
     }
 
     public static boolean isDecimalType(ColumnDescriptor columnDescriptor)

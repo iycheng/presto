@@ -224,7 +224,7 @@ public abstract class AbstractTestHiveFileSystem
                 new HivePartitionStats(),
                 new HiveFileRenamer(),
                 columnConverterProvider,
-                new QuickStatsProvider(HDFS_ENVIRONMENT, DO_NOTHING_DIRECTORY_LISTER, new HiveClientConfig(), new NamenodeStats(), ImmutableList.of()),
+                new QuickStatsProvider(metastoreClient, HDFS_ENVIRONMENT, DO_NOTHING_DIRECTORY_LISTER, new HiveClientConfig(), new NamenodeStats(), ImmutableList.of()),
                 new HiveTableWritabilityChecker(config));
 
         transactionManager = new HiveTransactionManager();
@@ -254,6 +254,7 @@ public abstract class AbstractTestHiveFileSystem
                 FUNCTION_AND_TYPE_MANAGER,
                 config,
                 metastoreClientConfig,
+                new SortingFileWriterConfig(),
                 locationService,
                 HiveTestUtils.PARTITION_UPDATE_CODEC,
                 HiveTestUtils.PARTITION_UPDATE_SMILE_CODEC,

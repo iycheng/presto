@@ -28,6 +28,7 @@ import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.Constraint;
 import com.facebook.presto.spi.MaterializedViewDefinition;
+import com.facebook.presto.spi.NewTableLayout;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.SystemTable;
@@ -43,6 +44,7 @@ import com.facebook.presto.spi.connector.ConnectorPartitioningHandle;
 import com.facebook.presto.spi.connector.ConnectorTableVersion;
 import com.facebook.presto.spi.constraints.TableConstraint;
 import com.facebook.presto.spi.function.SqlFunction;
+import com.facebook.presto.spi.plan.PartitioningHandle;
 import com.facebook.presto.spi.security.GrantInfo;
 import com.facebook.presto.spi.security.PrestoPrincipal;
 import com.facebook.presto.spi.security.Privilege;
@@ -50,7 +52,6 @@ import com.facebook.presto.spi.security.RoleGrant;
 import com.facebook.presto.spi.statistics.ComputedStatistics;
 import com.facebook.presto.spi.statistics.TableStatistics;
 import com.facebook.presto.spi.statistics.TableStatisticsMetadata;
-import com.facebook.presto.sql.planner.PartitioningHandle;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.slice.Slice;
 
@@ -212,6 +213,11 @@ public interface Metadata
     void renameTable(Session session, TableHandle tableHandle, QualifiedObjectName newTableName);
 
     /**
+     * Set properties to the specified table.
+     */
+    void setTableProperties(Session session, TableHandle tableHandle, Map<String, Object> properties);
+
+    /**
      * Rename the specified column.
      */
     void renameColumn(Session session, TableHandle tableHandle, ColumnHandle source, String target);
@@ -240,9 +246,6 @@ public interface Metadata
 
     Optional<NewTableLayout> getNewTableLayout(Session session, String catalogName, ConnectorTableMetadata tableMetadata);
 
-    @Experimental
-    Optional<NewTableLayout> getPreferredShuffleLayoutForNewTable(Session session, String catalogName, ConnectorTableMetadata tableMetadata);
-
     /**
      * Begin the atomic creation of a table with data.
      */
@@ -254,9 +257,6 @@ public interface Metadata
     Optional<ConnectorOutputMetadata> finishCreateTable(Session session, OutputTableHandle tableHandle, Collection<Slice> fragments, Collection<ComputedStatistics> computedStatistics);
 
     Optional<NewTableLayout> getInsertLayout(Session session, TableHandle target);
-
-    @Experimental
-    Optional<NewTableLayout> getPreferredShuffleLayoutForInsert(Session session, TableHandle target);
 
     /**
      * Describes statistics that must be collected during a write.
@@ -367,6 +367,11 @@ public interface Metadata
      * Creates the specified view with the specified view definition.
      */
     void createView(Session session, String catalogName, ConnectorTableMetadata viewMetadata, String viewData, boolean replace);
+
+    /**
+     * Rename the specified view.
+     */
+    void renameView(Session session, QualifiedObjectName existingViewName, QualifiedObjectName newViewName);
 
     /**
      * Drops the specified view.

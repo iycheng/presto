@@ -48,6 +48,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.IntStream;
 
 import static com.facebook.presto.SystemSessionProperties.ADD_PARTIAL_NODE_FOR_ROW_NUMBER_WITH_LIMIT;
@@ -55,6 +56,7 @@ import static com.facebook.presto.SystemSessionProperties.ENABLE_INTERMEDIATE_AG
 import static com.facebook.presto.SystemSessionProperties.FIELD_NAMES_IN_JSON_CAST_ENABLED;
 import static com.facebook.presto.SystemSessionProperties.GENERATE_DOMAIN_FILTERS;
 import static com.facebook.presto.SystemSessionProperties.HASH_PARTITION_COUNT;
+import static com.facebook.presto.SystemSessionProperties.INLINE_PROJECTIONS_ON_VALUES;
 import static com.facebook.presto.SystemSessionProperties.ITERATIVE_OPTIMIZER_TIMEOUT;
 import static com.facebook.presto.SystemSessionProperties.JOIN_PREFILTER_BUILD_SIDE;
 import static com.facebook.presto.SystemSessionProperties.KEY_BASED_SAMPLING_ENABLED;
@@ -1668,6 +1670,17 @@ public abstract class AbstractTestQueries
     }
 
     @Test
+    public void testUncorrelatedSubqueryWithEmptyResult()
+    {
+        assertQuery(
+                "SELECT regionkey, (select name from nation where false) from region",
+                "SELECT regionkey, NULL from region");
+        assertQuery(
+                "SELECT regionkey, (select name from nation where nationkey = 5 and mod(nationkey,5) = 1) from region",
+                "SELECT regionkey, NULL from region");
+    }
+
+    @Test
     public void testChecksum()
     {
         assertQuery("SELECT to_hex(checksum(0))", "SELECT '0000000000000000'");
@@ -2776,6 +2789,28 @@ public abstract class AbstractTestQueries
     }
 
     @Test
+    public void testUse()
+    {
+        Session sessionWithDefaultCatalogAndSchema = getSession();
+        String catalog = sessionWithDefaultCatalogAndSchema.getCatalog().get();
+        String schema = sessionWithDefaultCatalogAndSchema.getSchema().get();
+
+        assertQueryFails(sessionWithDefaultCatalogAndSchema, "USE non_exist_schema", format("Schema does not exist: %s.non_exist_schema", catalog));
+        assertQueryFails(sessionWithDefaultCatalogAndSchema, "USE non_exist_catalog.any_schema", "Catalog does not exist: non_exist_catalog");
+        assertQueryFails(sessionWithDefaultCatalogAndSchema, format("USE %s.non_exist_schema", catalog), format("Schema does not exist: %s.non_exist_schema", catalog));
+        assertUpdate(sessionWithDefaultCatalogAndSchema, format("USE %s.%s", catalog, schema));
+
+        Session sessionWithoutDefaultCatalogAndSchema = Session.builder(getSession())
+                .setCatalog(null)
+                .setSchema(null)
+                .build();
+        assertQueryFails(sessionWithoutDefaultCatalogAndSchema, "USE any_schema", ".* Catalog must be specified when session catalog is not set");
+        assertQueryFails(sessionWithoutDefaultCatalogAndSchema, "USE non_exist_catalog.any_schema", "Catalog does not exist: non_exist_catalog");
+        assertQueryFails(sessionWithoutDefaultCatalogAndSchema, format("USE %s.non_exist_schema", catalog), format("Schema does not exist: %s.non_exist_schema", catalog));
+        assertUpdate(sessionWithoutDefaultCatalogAndSchema, format("USE %s.%s", catalog, schema));
+    }
+
+    @Test
     public void testShowSchemasLike()
     {
         MaterializedResult result = computeActual(format("SHOW SCHEMAS LIKE '%s'", getSession().getSchema().get()));
@@ -3060,7 +3095,8 @@ public abstract class AbstractTestQueries
                 ImmutableMap.of(),
                 getSession().getTracer(),
                 getSession().getWarningCollector(),
-                getSession().getRuntimeStats());
+                getSession().getRuntimeStats(),
+                getSession().getQueryType());
         MaterializedResult result = computeActual(session, "SHOW SESSION");
 
         ImmutableMap<String, MaterializedRow> properties = Maps.uniqueIndex(result.getMaterializedRows(), input -> {
@@ -3111,6 +3147,32 @@ public abstract class AbstractTestQueries
         catch (Exception e) {
             assertEquals("Escape string must be a single character", e.getMessage());
         }
+    }
+
+    @Test
+    public void testShowSessionWithoutNativeSessionProperties()
+    {
+        // SHOW SESSION will exclude native-worker session properties
+        @Language("SQL") String sql = "SHOW SESSION";
+        MaterializedResult actualResult = computeActual(sql);
+        List<MaterializedRow> actualRows = actualResult.getMaterializedRows();
+        String nativeSessionProperty = "native_expression_max_array_size_in_reduce";
+        List<MaterializedRow> filteredRows = getNativeWorkerSessionProperties(actualRows, nativeSessionProperty);
+        assertTrue(filteredRows.isEmpty());
+    }
+
+    @Test
+    public void testSetSessionNativeWorkerSessionProperty()
+    {
+        // SET SESSION on a native-worker session property
+        @Language("SQL") String setSession = "SET SESSION native_expression_max_array_size_in_reduce=50000";
+        MaterializedResult setSessionResult = computeActual(setSession);
+        assertEquals(
+                setSessionResult.toString(),
+                "MaterializedResult{rows=[[true]], " +
+                        "types=[boolean], " +
+                        "setSessionProperties={native_expression_max_array_size_in_reduce=50000}, " +
+                        "resetSessionProperties=[], updateType=SET SESSION}");
     }
 
     @Test
@@ -7418,6 +7480,7 @@ public abstract class AbstractTestQueries
         assertQuery("select x, case x when 1 then 1 when 2 then 2 else 3 end from (select x from (values 1, 2, 3, 4) t(x))");
         assertQuery("select x, case when x=1 then 1 when x=2 then 2 else 3 end from (select x from (values 1, 2, 3, 4) t(x))");
         assertQuery("select x, case when x=1 then 1 when x in (2, 3) then 2 else 3 end from (select x from (values 1, 2, 3, 4) t(x))");
+        assertQuery("select case (case true when true then true else coalesce(false = any (values true), true) end) when false then true end limit 1");
 
         // disable the feature and test to make sure it doesn't fire
 
@@ -7754,21 +7817,62 @@ public abstract class AbstractTestQueries
     @Test
     public void testJoinPrefilter()
     {
-        // Orig
-        String testQuery = "SELECT 1 from region join nation using(regionkey)";
-        MaterializedResult result = computeActual("explain(type distributed) " + testQuery);
-        assertEquals(((String) result.getMaterializedRows().get(0).getField(0)).indexOf("SemiJoin"), -1);
-        result = computeActual(testQuery);
-        assertEquals(result.getRowCount(), 25);
+        {
+            // Orig
+            String testQuery = "SELECT 1 from region join nation using(regionkey)";
+            MaterializedResult result = computeActual("explain(type distributed) " + testQuery);
+            assertEquals(((String) result.getMaterializedRows().get(0).getField(0)).indexOf("SemiJoin"), -1);
+            result = computeActual(testQuery);
+            assertEquals(result.getRowCount(), 25);
 
-        // With feature
-        Session session = Session.builder(getSession())
-                .setSystemProperty(JOIN_PREFILTER_BUILD_SIDE, String.valueOf(true))
-                .build();
-        result = computeActual(session, "explain(type distributed) " + testQuery);
-        assertNotEquals(((String) result.getMaterializedRows().get(0).getField(0)).indexOf("SemiJoin"), -1);
-        result = computeActual(session, testQuery);
-        assertEquals(result.getRowCount(), 25);
+            // With feature
+            Session session = Session.builder(getSession())
+                    .setSystemProperty(JOIN_PREFILTER_BUILD_SIDE, String.valueOf(true))
+                    .build();
+            result = computeActual(session, "explain(type distributed) " + testQuery);
+            assertNotEquals(((String) result.getMaterializedRows().get(0).getField(0)).indexOf("SemiJoin"), -1);
+            result = computeActual(session, testQuery);
+            assertEquals(result.getRowCount(), 25);
+        }
+
+        {
+            // Orig
+            @Language("SQL") String testQuery = "SELECT 1 from region r join nation n on cast(r.regionkey as varchar) = cast(n.regionkey as varchar)";
+            MaterializedResult result = computeActual("explain(type distributed) " + testQuery);
+            assertEquals(((String) result.getMaterializedRows().get(0).getField(0)).indexOf("SemiJoin"), -1);
+            result = computeActual(testQuery);
+            assertEquals(result.getRowCount(), 25);
+
+            // With feature
+            Session session = Session.builder(getSession())
+                    .setSystemProperty(JOIN_PREFILTER_BUILD_SIDE, String.valueOf(true))
+                    .setSystemProperty(REMOVE_REDUNDANT_CAST_TO_VARCHAR_IN_JOIN, String.valueOf(false))
+                    .build();
+            result = computeActual(session, "explain(type distributed) " + testQuery);
+            assertNotEquals(((String) result.getMaterializedRows().get(0).getField(0)).indexOf("SemiJoin"), -1);
+            assertNotEquals(((String) result.getMaterializedRows().get(0).getField(0)).indexOf("XX_HASH_64"), -1);
+            result = computeActual(session, testQuery);
+            assertEquals(result.getRowCount(), 25);
+        }
+
+        {
+            // Orig
+            String testQuery = "SELECT 1 from lineitem l join orders o on l.orderkey = o.orderkey and l.suppkey = o.custkey";
+            MaterializedResult result = computeActual("explain(type distributed) " + testQuery);
+            assertEquals(((String) result.getMaterializedRows().get(0).getField(0)).indexOf("SemiJoin"), -1);
+            result = computeActual(testQuery);
+            assertEquals(result.getRowCount(), 37);
+
+            // With feature
+            Session session = Session.builder(getSession())
+                    .setSystemProperty(JOIN_PREFILTER_BUILD_SIDE, String.valueOf(true))
+                    .build();
+            result = computeActual(session, "explain(type distributed) " + testQuery);
+            assertNotEquals(((String) result.getMaterializedRows().get(0).getField(0)).indexOf("SemiJoin"), -1);
+            assertNotEquals(((String) result.getMaterializedRows().get(0).getField(0)).indexOf("XX_HASH_64"), -1);
+            result = computeActual(session, testQuery);
+            assertEquals(result.getRowCount(), 37);
+        }
     }
 
     @Test
@@ -7840,5 +7944,44 @@ public abstract class AbstractTestQueries
                 .setSystemProperty(OPTIMIZE_HASH_GENERATION, optimizeHashGeneration)
                 .build();
         assertQuery(session, "SELECT DISTINCT x FROM (VALUES (REAL '0.0'), (REAL '-0.0')) t(x)", "SELECT  CAST(0.0 AS REAL)");
+    }
+
+    @Test
+    public void testEvaluateProjectOnValues()
+    {
+        Session session = Session.builder(getSession())
+                .setSystemProperty(INLINE_PROJECTIONS_ON_VALUES, "true")
+                .build();
+        assertQuery(session,
+                "SELECT MAP(ARRAY[1,2,3],ARRAY['one','two','three'])[x] from (values 1,2) as t(x)",
+                "SELECT * FROM (VALUES 'one','two')");
+        assertQuery(session,
+                "SELECT CASE WHEN x<y THEN x ELSE y END from (values (1,2),(3,4)) as t(x,y)",
+                "SELECT * FROM (VALUES 1,3)");
+        assertQuery(session,
+                "SELECT MAP(ARRAY[ARRAY[1,1],ARRAY[2,2]],ARRAY[1,2])[x] from (values ARRAY[1,1]) as t(x)",
+                "SELECT * FROM (VALUES 1)");
+        assertQuery(session,
+                "SELECT SUBSTR(Y,1,1) FROM (SELECT SUBSTR(X, 1,2) FROM (VALUES 'abcd', 'efgh') AS T(X)) AS T(Y)",
+                "SELECT * FROM (VALUES 'a','e')");
+        assertQuery(session,
+                "SELECT a * 2, a * 4 from (VALUES 2, 4) t(a)",
+                "SELECT * FROM (VALUES (4,8),(8,16))");
+        assertQuery(session,
+                "SELECT a + 1 FROM (VALUES (1, 2), (3, 4)) t(a, b)",
+                "SELECT * FROM (VALUES 2, 4)");
+        assertQuery(session,
+                "WITH t1 as (SELECT a + 1 as a FROM (VALUES 6) as t(a)) SELECT a * 2, a - 1 FROM t1",
+                "SELECT * FROM (VALUES (14, 6))");
+        assertQuery(session,
+                "SELECT a * 2, a - 1 FROM (SELECT x * 2 as a FROM (VALUES 15) t(x))",
+                "SELECT * FROM (VALUES (60, 29))");
+    }
+
+    private List<MaterializedRow> getNativeWorkerSessionProperties(List<MaterializedRow> inputRows, String sessionPropertyName)
+    {
+        return inputRows.stream()
+                .filter(row -> Pattern.matches(sessionPropertyName, row.getFields().get(4).toString()))
+                .collect(toList());
     }
 }

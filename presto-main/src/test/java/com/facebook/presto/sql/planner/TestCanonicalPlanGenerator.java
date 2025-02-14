@@ -22,6 +22,9 @@ import com.facebook.presto.common.type.TestingTypeDeserializer;
 import com.facebook.presto.common.type.TestingTypeManager;
 import com.facebook.presto.common.type.Type;
 import com.facebook.presto.spi.TableHandle;
+import com.facebook.presto.spi.plan.Partitioning;
+import com.facebook.presto.spi.plan.PartitioningHandle;
+import com.facebook.presto.spi.plan.PartitioningScheme;
 import com.facebook.presto.spi.plan.TableScanNode;
 import com.facebook.presto.sql.planner.CanonicalTableScanNode.CanonicalTableHandle;
 import com.facebook.presto.sql.planner.assertions.BasePlanTest;
@@ -343,7 +346,7 @@ public class TestCanonicalPlanGenerator
                         .filter(f -> !f.isSynthetic())
                         .map(Field::getName)
                         .collect(toImmutableSet()),
-                ImmutableSet.of("partitioning", "outputLayout", "hashColumn", "replicateNullsAndAny", "bucketToPartition"));
+                ImmutableSet.of("partitioning", "outputLayout", "hashColumn", "replicateNullsAndAny", "scaleWriters", "encoding", "bucketToPartition"));
         assertEquals(
                 Arrays.stream(Partitioning.class.getDeclaredFields())
                         .filter(f -> !f.isSynthetic())
@@ -372,7 +375,7 @@ public class TestCanonicalPlanGenerator
                         .filter(f -> !f.isSynthetic())
                         .map(Field::getName)
                         .collect(toImmutableSet()),
-                ImmutableSet.of("table", "assignments", "outputVariables", "currentConstraint", "enforcedConstraint", "tableConstraints"));
+                ImmutableSet.of("table", "assignments", "outputVariables", "currentConstraint", "enforcedConstraint", "tableConstraints", "cteMaterializationInfo"));
         assertEquals(
                 Arrays.stream(CanonicalTableScanNode.class.getDeclaredFields())
                         .filter(f -> !f.isSynthetic())

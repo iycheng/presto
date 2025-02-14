@@ -54,7 +54,8 @@ public abstract class TestIcebergDistributedQueries
     }
 
     @Override
-    protected QueryRunner createQueryRunner() throws Exception
+    protected QueryRunner createQueryRunner()
+            throws Exception
     {
         return IcebergQueryRunner.createIcebergQueryRunner(ImmutableMap.of(), catalogType, extraConnectorProperties);
     }
@@ -64,12 +65,6 @@ public abstract class TestIcebergDistributedQueries
     {
         // Not null columns are not yet supported by the connector
         return false;
-    }
-
-    @Override
-    public void testRenameTable()
-    {
-        // Rename table are not supported by the connector
     }
 
     @Override

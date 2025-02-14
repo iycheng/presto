@@ -18,18 +18,18 @@ import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.spi.VariableAllocator;
 import com.facebook.presto.spi.WarningCollector;
 import com.facebook.presto.spi.plan.EquiJoinClause;
+import com.facebook.presto.spi.plan.JoinNode;
+import com.facebook.presto.spi.plan.MergeJoinNode;
 import com.facebook.presto.spi.plan.PlanNode;
 import com.facebook.presto.spi.plan.PlanNodeIdAllocator;
 import com.facebook.presto.spi.relation.VariableReferenceExpression;
-import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.TypeProvider;
-import com.facebook.presto.sql.planner.plan.JoinNode;
-import com.facebook.presto.sql.planner.plan.MergeJoinNode;
 import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
 
 import java.util.List;
 
 import static com.facebook.presto.SystemSessionProperties.isGroupedExecutionEnabled;
+import static com.facebook.presto.SystemSessionProperties.isSingleNodeExecutionEnabled;
 import static com.facebook.presto.SystemSessionProperties.preferMergeJoinForSortedInputs;
 import static com.facebook.presto.common.block.SortOrder.ASC_NULLS_FIRST;
 import static com.facebook.presto.spi.plan.JoinType.INNER;
@@ -40,13 +40,13 @@ public class MergeJoinForSortedInputOptimizer
         implements PlanOptimizer
 {
     private final Metadata metadata;
-    private final SqlParser parser;
+    private final boolean nativeExecution;
     private boolean isEnabledForTesting;
 
-    public MergeJoinForSortedInputOptimizer(Metadata metadata, SqlParser parser)
+    public MergeJoinForSortedInputOptimizer(Metadata metadata, boolean nativeExecution)
     {
         this.metadata = requireNonNull(metadata, "metadata is null");
-        this.parser = requireNonNull(parser, "parser is null");
+        this.nativeExecution = nativeExecution;
     }
 
     @Override
@@ -58,7 +58,7 @@ public class MergeJoinForSortedInputOptimizer
     @Override
     public boolean isEnabled(Session session)
     {
-        return isEnabledForTesting || isGroupedExecutionEnabled(session) && preferMergeJoinForSortedInputs(session);
+        return isEnabledForTesting || isGroupedExecutionEnabled(session) && preferMergeJoinForSortedInputs(session) && !isSingleNodeExecutionEnabled(session);
     }
 
     @Override
@@ -141,8 +141,8 @@ public class MergeJoinForSortedInputOptimizer
         private boolean meetsDataRequirement(PlanNode left, PlanNode right, JoinNode node)
         {
             // Acquire data properties for both left and right side
-            StreamPropertyDerivations.StreamProperties leftProperties = StreamPropertyDerivations.derivePropertiesRecursively(left, metadata, session, types, parser);
-            StreamPropertyDerivations.StreamProperties rightProperties = StreamPropertyDerivations.derivePropertiesRecursively(right, metadata, session, types, parser);
+            StreamPropertyDerivations.StreamProperties leftProperties = StreamPropertyDerivations.derivePropertiesRecursively(left, metadata, session, nativeExecution);
+            StreamPropertyDerivations.StreamProperties rightProperties = StreamPropertyDerivations.derivePropertiesRecursively(right, metadata, session, nativeExecution);
 
             List<VariableReferenceExpression> leftJoinColumns = node.getCriteria().stream().map(EquiJoinClause::getLeft).collect(toImmutableList());
             List<VariableReferenceExpression> rightJoinColumns = node.getCriteria().stream()

@@ -27,13 +27,14 @@ import com.facebook.presto.common.type.DoubleType;
 import com.facebook.presto.common.type.MapType;
 import com.facebook.presto.common.type.RealType;
 import com.facebook.presto.common.type.RowType;
+import com.facebook.presto.common.type.TimestampType;
 import com.facebook.presto.common.type.TimestampWithTimeZoneType;
 import com.facebook.presto.common.type.Type;
+import com.facebook.presto.common.type.VarcharType;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.OperatorNotFoundException;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
-import com.facebook.presto.spi.ConnectorId;
 import com.facebook.presto.spi.MaterializedViewDefinition;
 import com.facebook.presto.spi.MaterializedViewStatus;
 import com.facebook.presto.spi.PrestoException;
@@ -135,6 +136,7 @@ import com.facebook.presto.sql.tree.Relation;
 import com.facebook.presto.sql.tree.RenameColumn;
 import com.facebook.presto.sql.tree.RenameSchema;
 import com.facebook.presto.sql.tree.RenameTable;
+import com.facebook.presto.sql.tree.RenameView;
 import com.facebook.presto.sql.tree.ResetSession;
 import com.facebook.presto.sql.tree.Return;
 import com.facebook.presto.sql.tree.Revoke;
@@ -145,6 +147,7 @@ import com.facebook.presto.sql.tree.SampledRelation;
 import com.facebook.presto.sql.tree.Select;
 import com.facebook.presto.sql.tree.SelectItem;
 import com.facebook.presto.sql.tree.SetOperation;
+import com.facebook.presto.sql.tree.SetProperties;
 import com.facebook.presto.sql.tree.SetSession;
 import com.facebook.presto.sql.tree.SimpleGroupBy;
 import com.facebook.presto.sql.tree.SingleColumn;
@@ -200,10 +203,10 @@ import static com.facebook.presto.common.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.common.type.UnknownType.UNKNOWN;
 import static com.facebook.presto.common.type.VarcharType.VARCHAR;
 import static com.facebook.presto.metadata.MetadataUtil.createQualifiedObjectName;
+import static com.facebook.presto.metadata.MetadataUtil.getConnectorIdOrThrow;
 import static com.facebook.presto.metadata.MetadataUtil.toSchemaTableName;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_ARGUMENTS;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
-import static com.facebook.presto.spi.StandardErrorCode.NOT_FOUND;
 import static com.facebook.presto.spi.StandardWarningCode.PERFORMANCE_WARNING;
 import static com.facebook.presto.spi.StandardWarningCode.REDUNDANT_ORDER_BY;
 import static com.facebook.presto.spi.analyzer.AccessControlRole.TABLE_CREATE;
@@ -613,12 +616,10 @@ class StatementAnalyzer
             }
 
             validateProperties(node.getProperties(), scope);
-            ConnectorId connectorId = metadata.getCatalogHandle(session, tableName.getCatalogName())
-                    .orElseThrow(() -> new PrestoException(NOT_FOUND, "Catalog not found: " + tableName.getCatalogName()));
 
             Map<String, Object> analyzeProperties = metadata.getAnalyzePropertyManager().getProperties(
-                    connectorId,
-                    connectorId.getCatalogName(),
+                    getConnectorIdOrThrow(session, metadata, tableName.getCatalogName()),
+                    tableName.getCatalogName(),
                     mapFromProperties(node.getProperties()),
                     session,
                     metadata,
@@ -971,6 +972,12 @@ class StatementAnalyzer
         }
 
         @Override
+        protected Scope visitSetProperties(SetProperties node, Optional<Scope> scope)
+        {
+            return createAndAssignScope(node, scope);
+        }
+
+        @Override
         protected Scope visitRenameColumn(RenameColumn node, Optional<Scope> scope)
         {
             return createAndAssignScope(node, scope);
@@ -996,6 +1003,12 @@ class StatementAnalyzer
 
         @Override
         protected Scope visitAlterColumnNotNull(AlterColumnNotNull node, Optional<Scope> scope)
+        {
+            return createAndAssignScope(node, scope);
+        }
+
+        @Override
+        protected Scope visitRenameView(RenameView node, Optional<Scope> scope)
         {
             return createAndAssignScope(node, scope);
         }
@@ -1414,16 +1427,16 @@ class StatementAnalyzer
             }
             Object evalStateExpr = evaluateConstantExpression(stateExpr, stateExprType, metadata, session, analysis.getParameters());
             if (tableVersionType == TIMESTAMP) {
-                if (!(stateExprType instanceof TimestampWithTimeZoneType)) {
+                if (!(stateExprType instanceof TimestampWithTimeZoneType || stateExprType instanceof TimestampType)) {
                     throw new SemanticException(TYPE_MISMATCH, stateExpr,
-                            "Type %s is invalid. Supported table version AS OF/BEFORE expression type is Timestamp with Time Zone.",
+                            "Type %s is invalid. Supported table version AS OF/BEFORE expression type is Timestamp or Timestamp with Time Zone.",
                             stateExprType.getDisplayName());
                 }
             }
             if (tableVersionType == VERSION) {
-                if (!(stateExprType instanceof BigintType)) {
+                if (!(stateExprType instanceof BigintType || stateExprType instanceof VarcharType)) {
                     throw new SemanticException(TYPE_MISMATCH, stateExpr,
-                            "Type %s is invalid. Supported table version AS OF/BEFORE expression type is BIGINT",
+                            "Type %s is invalid. Supported table version AS OF/BEFORE expression type is BIGINT or VARCHAR",
                             stateExprType.getDisplayName());
                 }
             }
@@ -2342,7 +2355,7 @@ class StatementAnalyzer
         private void analyzeWindowFrame(WindowFrame frame)
         {
             FrameBound.Type startType = frame.getStart().getType();
-            FrameBound.Type endType = frame.getEnd().orElse(new FrameBound(CURRENT_ROW)).getType();
+            FrameBound.Type endType = frame.getEnd().orElseGet(() -> new FrameBound(CURRENT_ROW)).getType();
 
             if (startType == UNBOUNDED_FOLLOWING) {
                 throw new SemanticException(INVALID_WINDOW_FRAME, frame, "Window frame start cannot be UNBOUNDED FOLLOWING");

@@ -133,17 +133,24 @@ public class TypeSignature
         return parameters;
     }
 
-    public List<TypeSignature> getTypeParametersAsTypeSignatures()
+    public List<TypeSignature> getTypeOrNamedTypeParametersAsTypeSignatures()
     {
         List<TypeSignature> result = new ArrayList<>();
         for (TypeSignatureParameter parameter : parameters) {
-            if (parameter.getKind() != ParameterKind.TYPE) {
-                throw new IllegalStateException(
-                        format("Expected all parameters to be TypeSignatures but [%s] was found", parameter.toString()));
+            switch (parameter.getKind()) {
+                case TYPE:
+                    result.add(parameter.getTypeSignature());
+                    break;
+                case NAMED_TYPE:
+                    result.add(parameter.getNamedTypeSignature().getTypeSignature());
+                    break;
+                default:
+                    throw new IllegalStateException(
+                            format("Expected all parameters to be of kind TYPE or NAMED_TYPE but [%s] kind was found for parameter: [%s]",
+                                    parameter.getKind(), parameter));
             }
-            result.add(parameter.getTypeSignature());
         }
-        return result;
+        return unmodifiableList(result);
     }
 
     public boolean isCalculated()
@@ -657,7 +664,7 @@ public class TypeSignature
             Map<Integer, DistinctTypeParsingData> parsedDistinctTypes)
     {
         String parameterName = signature.substring(begin, end).trim();
-        if (isDigit(signature.charAt(begin))) {
+        if (isDigit(parameterName.charAt(0))) {
             return TypeSignatureParameter.of(Long.parseLong(parameterName));
         }
         else if (literalCalculationParameters.contains(parameterName)) {
